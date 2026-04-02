@@ -8,6 +8,7 @@ final class ChatViewModel {
     var currentStatus: String?
     var activeAgent: AgentCategory = .general
     var inputText = ""
+    var pendingImages: [Data] = []
 
     private let orchestrator: Orchestrator
     private let userId = "local"
@@ -19,10 +20,15 @@ final class ChatViewModel {
     @MainActor
     func send(images: [Data]? = nil) {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+        guard !text.isEmpty || !pendingImages.isEmpty else { return }
 
+        let attachedImages = images ?? (pendingImages.isEmpty ? nil : pendingImages)
         inputText = ""
-        messages.append(ChatMessage(role: .user, content: text))
+        pendingImages = []
+
+        var userMsg = ChatMessage(role: .user, content: text.isEmpty ? "What's in this image?" : text)
+        userMsg.images = attachedImages
+        messages.append(userMsg)
         isStreaming = true
         currentStatus = nil
 
@@ -32,7 +38,7 @@ final class ChatViewModel {
 
             do {
                 for try await event in orchestrator.handleMessageStream(
-                    userId: userId, message: text, images: images
+                    userId: userId, message: text.isEmpty ? "What's in this image?" : text, images: attachedImages
                 ) {
                     await MainActor.run {
                         switch event {
