@@ -1,7 +1,9 @@
 import SwiftUI
+import AppKit
 
 @main
 struct MacbotApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @State private var appState = AppState()
 
     var body: some Scene {
@@ -28,11 +30,36 @@ struct MacbotApp: App {
                     ChatView(viewModel: appState.chatViewModel!)
                 }
             }
+            .onAppear {
+                // Activate the app so the window comes to front and accepts input
+                NSApplication.shared.activate(ignoringOtherApps: true)
+            }
         }
 
         Settings {
             SettingsView()
         }
+    }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // Set activation policy to regular so the app gets a dock icon and proper window behavior
+        NSApplication.shared.setActivationPolicy(.regular)
+        NSApplication.shared.activate(ignoringOtherApps: true)
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag {
+            // Reopen main window when dock icon is clicked
+            for window in sender.windows {
+                if window.title == "Macbot" {
+                    window.makeKeyAndOrderFront(nil)
+                    return true
+                }
+            }
+        }
+        return true
     }
 }
 
@@ -49,7 +76,6 @@ final class AppState {
     func initialize() async {
         let reachable = await orchestrator.client.isReachable()
         if reachable {
-            // Make the app ready immediately — prewarm in background
             let vm = ChatViewModel(orchestrator: orchestrator)
             await MainActor.run {
                 self.chatViewModel = vm
@@ -57,7 +83,6 @@ final class AppState {
             }
             Log.app.info("Macbot ready")
 
-            // Warm models in background (non-blocking)
             Task.detached(priority: .background) { [orchestrator] in
                 await orchestrator.prewarm()
             }

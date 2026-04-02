@@ -3,73 +3,99 @@ import MarkdownUI
 
 struct ChatView: View {
     @Bindable var viewModel: ChatViewModel
+    @FocusState private var inputFocused: Bool
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Messages
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
-                        ForEach(viewModel.messages) { msg in
-                            MessageBubble(message: msg)
-                                .id(msg.id)
-                        }
+        NavigationSplitView {
+            // Sidebar
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Macbot")
+                    .font(.headline)
+                    .padding(.horizontal)
 
-                        if let status = viewModel.currentStatus {
-                            StatusIndicator(text: status)
-                                .id("status")
-                        }
-                    }
-                    .padding()
+                Divider()
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("Agent: \(viewModel.activeAgent.displayName)", systemImage: "cpu")
+                    Label("\(viewModel.messages.count) messages", systemImage: "bubble.left.and.bubble.right")
                 }
-                .onChange(of: viewModel.messages.count) {
-                    withAnimation {
-                        if let lastId = viewModel.messages.last?.id {
-                            proxy.scrollTo(lastId, anchor: .bottom)
-                        }
-                    }
-                }
-                .onChange(of: viewModel.currentStatus) { _, _ in
-                    withAnimation {
-                        proxy.scrollTo("status", anchor: .bottom)
-                    }
-                }
-            }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal)
 
-            Divider()
+                Spacer()
 
-            // Input
-            HStack(spacing: 10) {
-                TextField("Message macbot...", text: $viewModel.inputText, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .lineLimit(1...5)
-                    .onSubmit { viewModel.send() }
-                    .disabled(viewModel.isStreaming)
-
-                Button(action: { viewModel.send() }) {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.title2)
-                        .foregroundStyle(viewModel.inputText.isEmpty ? .secondary : Color.accentColor)
-                }
-                .disabled(viewModel.inputText.isEmpty || viewModel.isStreaming)
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-        }
-        .frame(minWidth: 500, minHeight: 400)
-        .toolbar {
-            ToolbarItem(placement: .automatic) {
-                AgentBadge(category: viewModel.activeAgent)
-            }
-
-            ToolbarItem(placement: .automatic) {
                 Button(action: { viewModel.clearConversation() }) {
-                    Image(systemName: "trash")
+                    Label("Clear Conversation", systemImage: "trash")
                 }
-                .help("Clear conversation")
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal)
+                .padding(.bottom, 12)
+            }
+            .padding(.top, 12)
+            .navigationSplitViewColumnWidth(min: 160, ideal: 180, max: 220)
+        } detail: {
+            VStack(spacing: 0) {
+                // Messages
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 12) {
+                            ForEach(viewModel.messages) { msg in
+                                MessageBubble(message: msg)
+                                    .id(msg.id)
+                            }
+
+                            if let status = viewModel.currentStatus {
+                                StatusIndicator(text: status)
+                                    .id("status")
+                            }
+                        }
+                        .padding()
+                    }
+                    .onChange(of: viewModel.messages.count) {
+                        withAnimation {
+                            if let lastId = viewModel.messages.last?.id {
+                                proxy.scrollTo(lastId, anchor: .bottom)
+                            }
+                        }
+                    }
+                }
+
+                Divider()
+
+                // Input bar
+                HStack(spacing: 10) {
+                    TextField("Message macbot...", text: $viewModel.inputText, axis: .vertical)
+                        .textFieldStyle(.roundedBorder)
+                        .lineLimit(1...5)
+                        .focused($inputFocused)
+                        .onSubmit { sendMessage() }
+                        .disabled(viewModel.isStreaming)
+
+                    Button(action: { sendMessage() }) {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.title2)
+                            .foregroundStyle(
+                                viewModel.inputText.trimmingCharacters(in: .whitespaces).isEmpty
+                                ? .secondary : Color.accentColor
+                            )
+                    }
+                    .disabled(viewModel.inputText.trimmingCharacters(in: .whitespaces).isEmpty || viewModel.isStreaming)
+                    .buttonStyle(.plain)
+                    .keyboardShortcut(.return, modifiers: [])
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
             }
         }
+        .frame(minWidth: 600, minHeight: 450)
+        .onAppear { inputFocused = true }
+    }
+
+    private func sendMessage() {
+        viewModel.send()
+        inputFocused = true
     }
 }
 
