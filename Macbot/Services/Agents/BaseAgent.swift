@@ -208,6 +208,12 @@ class BaseAgent {
                 return ThinkingStripper.strip(resp.content)
             }
 
+            // Log tool calls
+            let toolNames = toolCalls.compactMap {
+                ($0["function"] as? [String: Any])?["name"] as? String
+            }
+            Log.agents.info("[\(self.name)] calling tools: \(toolNames.joined(separator: ", "))")
+
             // Execute tools in parallel
             let results = await toolRegistry.executeAll(toolCalls)
             for (_, result) in results {
@@ -276,19 +282,23 @@ class BaseAgent {
                             return
                         }
 
-                        // Status update
+                        // Status update before tool execution
                         stepCount += 1
                         let toolNames = toolCalls.compactMap {
                             ($0["function"] as? [String: Any])?["name"] as? String
                         }
                         let labels = toolNames.map { Self.toolLabels[$0] ?? $0 }
-                        continuation.yield(.status("Step \(stepCount): \(labels.joined(separator: ", "))..."))
+                        let stepLabel = labels.joined(separator: ", ")
+                        continuation.yield(.status("Step \(stepCount): \(stepLabel)..."))
 
                         // Execute tools in parallel
                         let results = await toolRegistry.executeAll(toolCalls)
                         for (_, result) in results {
                             appendToHistory(["role": "tool", "content": result])
                         }
+
+                        // Status update after tool execution — model is now processing results
+                        continuation.yield(.status("Step \(stepCount): \(stepLabel) — done. Thinking..."))
                     }
 
                     continuation.yield(.text("Max tool iterations reached."))
