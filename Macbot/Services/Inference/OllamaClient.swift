@@ -28,6 +28,7 @@ final class OllamaClient: InferenceProvider, @unchecked Sendable {
             "stream": false,
             "options": ["temperature": temperature, "num_ctx": numCtx],
             "keep_alive": keepAlive,
+            "think": false,
         ]
         if let tools { payload["tools"] = tools }
 
@@ -35,8 +36,14 @@ final class OllamaClient: InferenceProvider, @unchecked Sendable {
         let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
         let message = json["message"] as? [String: Any] ?? [:]
 
+        // Some models put output in "thinking" key when think mode leaks through
+        var content = message["content"] as? String ?? ""
+        if content.isEmpty, let thinking = message["thinking"] as? String {
+            content = thinking
+        }
+
         return ChatResponse(
-            content: message["content"] as? String ?? "",
+            content: content,
             toolCalls: message["tool_calls"] as? [[String: Any]]
         )
     }
@@ -58,6 +65,7 @@ final class OllamaClient: InferenceProvider, @unchecked Sendable {
                         "stream": true,
                         "options": ["temperature": temperature, "num_ctx": numCtx],
                         "keep_alive": keepAlive,
+                        "think": false,
                     ]
 
                     let request = try makeRequest("/api/chat", payload: payload)
