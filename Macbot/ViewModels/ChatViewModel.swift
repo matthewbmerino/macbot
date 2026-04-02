@@ -61,13 +61,18 @@ final class ChatViewModel {
                     }
                 }
             } catch {
-                responseText = "Error: \(error.localizedDescription)"
+                let errorMsg = "Something went wrong: \(error.localizedDescription)"
+                Log.agents.error("Chat error: \(error)")
+                await MainActor.run {
+                    updateLastAgentMessage(errorMsg, agent: agentCategory)
+                }
             }
 
             await MainActor.run {
-                if responseText.isEmpty && messages.last?.role != .assistant {
+                if messages.last?.role != .assistant {
                     messages.append(ChatMessage(
-                        role: .assistant, content: "No response generated.",
+                        role: .assistant,
+                        content: responseText.isEmpty ? "No response — Ollama may still be loading the model. Try again in a moment." : responseText,
                         agentCategory: agentCategory
                     ))
                 }

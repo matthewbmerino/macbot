@@ -49,13 +49,18 @@ final class AppState {
     func initialize() async {
         let reachable = await orchestrator.client.isReachable()
         if reachable {
-            await orchestrator.prewarm()
+            // Make the app ready immediately — prewarm in background
             let vm = ChatViewModel(orchestrator: orchestrator)
             await MainActor.run {
                 self.chatViewModel = vm
                 self.isReady = true
             }
             Log.app.info("Macbot ready")
+
+            // Warm models in background (non-blocking)
+            Task.detached(priority: .background) { [orchestrator] in
+                await orchestrator.prewarm()
+            }
         }
     }
 }
