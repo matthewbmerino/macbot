@@ -13,7 +13,7 @@ struct MacbotApp: App {
             } else {
                 VStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text("Setting up...").font(.caption)
+                    Text("Connecting...").font(.caption)
                 }
                 .padding()
             }
@@ -21,25 +21,18 @@ struct MacbotApp: App {
         .menuBarExtraStyle(.window)
 
         Window("Macbot", id: "main") {
-            mainContent
+            if !appState.authService.isUnlocked {
+                LockScreen(authService: appState.authService)
+            } else if appState.isReady, let vm = appState.chatViewModel {
+                ChatView(viewModel: vm)
+            } else {
+                ProgressView("Connecting to Ollama...")
+                    .frame(width: 300, height: 200)
+            }
         }
 
         Settings {
             SettingsView()
-        }
-    }
-
-    @ViewBuilder
-    private var mainContent: some View {
-        if !appState.authService.isUnlocked {
-            LockScreen(authService: appState.authService)
-        } else if !appState.isReady {
-            OnboardingView(client: appState.client) { config in
-                config.save()
-                Task { await appState.initialize(with: config) }
-            }
-        } else if let vm = appState.chatViewModel {
-            ChatView(viewModel: vm)
         }
     }
 }
@@ -63,53 +56,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 @Observable
 final class AppState {
-    let client = OllamaClient()
+    let orchestrator = Orchestrator()
     let authService = AuthService()
-    var orchestrator: Orchestrator?
     var chatViewModel: ChatViewModel?
     var isReady = false
 
     init() {
-        // Try auto-login
         authService.authenticate()
 
-        // Watch for auth changes and auto-init if config exists
         Task {
-            // Poll for auth (simple, reliable)
             while !authService.isUnlocked {
                 try? await Task.sleep(for: .milliseconds(300))
             }
-
-            // Auth succeeded — if we have a saved config, go straight to chat
-            if let savedConfig = ModelConfig.load() {
-                await initialize(with: savedConfig)
-            }
-            // Otherwise, SwiftUI will show OnboardingView which calls initialize when done
+            await initialize()
         }
     }
 
     @MainActor
-    func initialize(with config: ModelConfig) async {
-        let orch = Orchestrator(modelConfig: config)
-        let vm = ChatViewModel(orchestrator: orch)
+    func initialize() async {
+        let reachable = await orchestrator.client.isReachable()
+        if reachable {
+            self.chatViewModel = ChatViewModel(orchestrator: orchestrator)
+            self.isReady = true
 
-        self.orchestrator = orch
-        self.chatViewModel = vm
-        self.isReady = true
+            QuickPanelController.shared.orchestrator = orchestrator
+            HotkeyManager.shared.registerDefaults {
+                QuickPanelController.shared.toggle()
+            }
 
-        // Quick panel
-        QuickPanelController.shared.orchestrator = orch
+            Log.app.info("Macbot ready")
 
-        // Global hotkey
-        HotkeyManager.shared.registerDefaults {
-            QuickPanelController.shared.toggle()
-        }
-
-        Log.app.info("Macbot ready — general=\(config.general), coder=\(config.coder)")
-
-        // Warm models in background
-        Task.detached(priority: .background) {
-            await orch.prewarm()
+            Task.detached(priority: .background) { [orchestrator = self.orchestrator] in
+                await orchestrator.prewarm()
+            }
         }
     }
 }
