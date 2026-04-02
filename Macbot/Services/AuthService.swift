@@ -8,10 +8,6 @@ final class AuthService {
     var isAuthenticating = false
     var authError: String?
 
-    private var lastActivity = Date()
-    private let autoLockTimeout: TimeInterval = 300 // 5 minutes
-    private var lockTimer: Timer?
-
     init() {
         startMonitoring()
     }
@@ -24,9 +20,7 @@ final class AuthService {
 
         var error: NSError?
         guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error) else {
-            // No biometrics available — fall back to device password
             guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) else {
-                // No auth available — allow access (development/testing)
                 Log.app.warning("No authentication available, granting access")
                 isUnlocked = true
                 return
@@ -50,7 +44,6 @@ final class AuthService {
                 self.isAuthenticating = false
                 if success {
                     self.isUnlocked = true
-                    self.lastActivity = Date()
                     self.authError = nil
                     Log.app.info("Authentication successful")
                 } else {
@@ -62,11 +55,7 @@ final class AuthService {
         }
     }
 
-    // MARK: - Auto-Lock
-
-    func recordActivity() {
-        lastActivity = Date()
-    }
+    // MARK: - Lock (only on screen lock)
 
     func lock() {
         isUnlocked = false
@@ -74,17 +63,7 @@ final class AuthService {
     }
 
     private func startMonitoring() {
-        // Check for idle timeout every 30 seconds
-        lockTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
-            guard let self, self.isUnlocked else { return }
-            if Date().timeIntervalSince(self.lastActivity) > self.autoLockTimeout {
-                DispatchQueue.main.async {
-                    self.lock()
-                }
-            }
-        }
-
-        // Lock when screen sleeps or user switches
+        // Only lock when the SCREEN locks — not on idle, not on app switch
         let center = DistributedNotificationCenter.default()
         center.addObserver(
             forName: NSNotification.Name("com.apple.screenIsLocked"),
@@ -92,38 +71,18 @@ final class AuthService {
         ) { [weak self] _ in
             self?.lock()
         }
-
-        // Lock when app goes to background
-        NotificationCenter.default.addObserver(
-            forName: NSApplication.didResignActiveNotification,
-            object: nil, queue: .main
-        ) { [weak self] _ in
-            // Only lock after extended background (not brief window switches)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 60) {
-                guard let self else { return }
-                if !NSApplication.shared.isActive && self.isUnlocked {
-                    self.lock()
-                }
-            }
-        }
     }
 
     // MARK: - Database Encryption Key
 
-    /// Get or create a database encryption key, stored in Keychain with biometric protection.
     static func databaseKey() -> String {
         let keychainKey = "com.macbot.db.encryption"
-
-        // Try to read existing key
         if let existing = KeychainManager.get(key: keychainKey) {
             return existing
         }
-
-        // Generate new 256-bit key
         var keyData = Data(count: 32)
         _ = keyData.withUnsafeMutableBytes { SecRandomCopyBytes(kSecRandomDefault, 32, $0.baseAddress!) }
         let key = keyData.base64EncodedString()
-
         KeychainManager.set(key: keychainKey, value: key)
         Log.app.info("Generated new database encryption key")
         return key

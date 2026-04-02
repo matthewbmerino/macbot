@@ -33,10 +33,6 @@ struct MacbotApp: App {
                     }
                 } else {
                     ChatView(viewModel: appState.chatViewModel!)
-                        .onAppear { appState.authService.recordActivity() }
-                        .onChange(of: appState.chatViewModel?.messages.count) { _, _ in
-                            appState.authService.recordActivity()
-                        }
                 }
             }
         }
