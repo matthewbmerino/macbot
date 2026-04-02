@@ -44,6 +44,27 @@ final class DatabaseManager {
             try db.create(index: "idx_conversations_user", on: "conversations", columns: ["userId"])
         }
 
+        migrator.registerMigration("v2_chat_history") { db in
+            try db.create(table: "chats") { t in
+                t.column("id", .text).primaryKey()
+                t.column("title", .text).notNull()
+                t.column("lastMessage", .text).notNull().defaults(to: "")
+                t.column("agentCategory", .text)
+                t.column("createdAt", .datetime).notNull()
+                t.column("updatedAt", .datetime).notNull()
+            }
+
+            try db.create(table: "chat_messages") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("chatId", .text).notNull().references("chats", onDelete: .cascade)
+                t.column("role", .text).notNull()
+                t.column("content", .text).notNull()
+                t.column("agentCategory", .text)
+                t.column("createdAt", .datetime).notNull()
+            }
+            try db.create(index: "idx_chat_messages_chatId", on: "chat_messages", columns: ["chatId"])
+        }
+
         return migrator
     }
 }

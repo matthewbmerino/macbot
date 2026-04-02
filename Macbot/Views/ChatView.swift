@@ -22,100 +22,163 @@ struct ChatView: View {
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Header
+            // Header + New Chat
             HStack {
                 Image(systemName: "brain")
                     .foregroundStyle(Color.accentColor)
                 Text("Macbot")
                     .font(.headline)
+                Spacer()
+                Button(action: { viewModel.newChat() }) {
+                    Image(systemName: "square.and.pencil")
+                        .font(.body)
+                }
+                .buttonStyle(.plain)
+                .help("New Chat")
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
 
-            Divider()
-
-            // New chat button
-            Button(action: { viewModel.clearConversation() }) {
-                Label("New Chat", systemImage: "plus.circle")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .contentShape(Rectangle())
-
-            Divider()
-
-            // Status section
-            VStack(alignment: .leading, spacing: 10) {
-                Text("STATUS")
-                    .font(.caption2)
-                    .fontWeight(.semibold)
+            // Search
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(.caption)
                     .foregroundStyle(.tertiary)
-                    .tracking(0.5)
-
-                HStack {
-                    Circle()
-                        .fill(viewModel.isStreaming ? Color.orange : Color.green)
-                        .frame(width: 6, height: 6)
-                    Text(viewModel.isStreaming ? "Thinking..." : "Ready")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Label(viewModel.activeAgent.displayName, systemImage: "cpu")
+                TextField("Search chats...", text: $viewModel.searchQuery)
+                    .textFieldStyle(.plain)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                Label("\(viewModel.messages.count) messages", systemImage: "bubble.left.and.bubble.right")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 16)
-            .padding(.top, 12)
-
-            Spacer()
-
-            // Suggested prompts
-            if viewModel.messages.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("TRY")
-                        .font(.caption2)
-                        .fontWeight(.semibold)
-                        .foregroundStyle(.tertiary)
-                        .tracking(0.5)
-
-                    ForEach(suggestedPrompts, id: \.self) { prompt in
-                        Button(action: {
-                            viewModel.inputText = prompt
-                            sendMessage()
-                        }) {
-                            Text(prompt)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(2)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .buttonStyle(.plain)
-                        .padding(6)
-                        .background(.quaternary.opacity(0.5))
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .onChange(of: viewModel.searchQuery) { _, _ in
+                        viewModel.search()
                     }
+                if !viewModel.searchQuery.isEmpty {
+                    Button(action: { viewModel.clearSearch() }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .buttonStyle(.plain)
                 }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 12)
             }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(.quaternary.opacity(0.5))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .padding(.horizontal, 10)
+            .padding(.bottom, 8)
+
+            Divider()
+
+            // Search results or chat list
+            if viewModel.isSearching {
+                searchResultsList
+            } else {
+                chatList
+            }
+
+            Divider()
+
+            // Status bar
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(viewModel.isStreaming ? Color.orange : Color.green)
+                    .frame(width: 5, height: 5)
+                Text(viewModel.isStreaming ? "Thinking..." : viewModel.activeAgent.displayName)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("\(viewModel.chats.count) chats")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
         }
         .background(.ultraThinMaterial)
     }
 
-    private var suggestedPrompts: [String] {
-        [
-            "What apps are running?",
-            "Search the web for today's news",
-            "Write a Python script",
-            "What's on my clipboard?",
-        ]
+    private var chatList: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 2) {
+                ForEach(viewModel.chats) { chat in
+                    chatRow(chat)
+                }
+            }
+            .padding(.vertical, 4)
+        }
+    }
+
+    private func chatRow(_ chat: ChatRecord) -> some View {
+        Button(action: { viewModel.selectChat(chat.id) }) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(chat.title)
+                    .font(.caption)
+                    .fontWeight(viewModel.currentChatId == chat.id ? .semibold : .regular)
+                    .lineLimit(1)
+
+                HStack {
+                    Text(chat.lastMessage)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                    Spacer()
+                    Text(chat.updatedAt, style: .relative)
+                        .font(.caption2)
+                        .foregroundStyle(.quaternary)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                viewModel.currentChatId == chat.id
+                ? Color.accentColor.opacity(0.1)
+                : Color.clear
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 6)
+        .contextMenu {
+            Button("Delete", role: .destructive) {
+                viewModel.deleteChat(chat.id)
+            }
+        }
+    }
+
+    private var searchResultsList: some View {
+        ScrollView {
+            if viewModel.searchResults.isEmpty {
+                Text("No results for \"\(viewModel.searchQuery)\"")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .padding()
+            } else {
+                LazyVStack(alignment: .leading, spacing: 4) {
+                    ForEach(Array(viewModel.searchResults.enumerated()), id: \.offset) { _, result in
+                        Button(action: { viewModel.selectChat(result.message.chatId) }) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(result.chatTitle)
+                                    .font(.caption)
+                                    .fontWeight(.medium)
+                                    .lineLimit(1)
+                                Text(result.message.content)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.horizontal, 6)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+        }
     }
 
     // MARK: - Chat Content
