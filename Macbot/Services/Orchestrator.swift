@@ -215,6 +215,7 @@ final class Orchestrator {
                     await WebTools.register(on: agent.toolRegistry)
                     await MacOSTools.register(on: agent.toolRegistry)
                     await ExecutorTools.register(on: agent.toolRegistry)
+                    await FinanceTools.register(on: agent.toolRegistry)
                 }
             }
         }
