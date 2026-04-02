@@ -275,9 +275,29 @@ class BaseAgent {
                         appendToHistory(["role": "assistant", "content": resp.content])
 
                         guard let toolCalls = resp.toolCalls, !toolCalls.isEmpty else {
-                            let content = ThinkingStripper.strip(resp.content)
-                            if !content.isEmpty {
-                                continuation.yield(.text(content))
+                            var content = ThinkingStripper.strip(resp.content)
+
+                            // Extract any [IMAGE:path] from the model's text response
+                            let imgRegex = try? NSRegularExpression(pattern: "\\[IMAGE:(.*?)\\]")
+                            if let regex = imgRegex {
+                                let range = NSRange(content.startIndex..., in: content)
+                                for match in regex.matches(in: content, range: range).reversed() {
+                                    if let pathRange = Range(match.range(at: 1), in: content) {
+                                        let imgPath = String(content[pathRange])
+                                        if let data = try? Data(contentsOf: URL(fileURLWithPath: imgPath)) {
+                                            continuation.yield(.image(data, URL(fileURLWithPath: imgPath).lastPathComponent))
+                                        }
+                                    }
+                                    // Remove the marker from text
+                                    if let fullRange = Range(match.range, in: content) {
+                                        content.removeSubrange(fullRange)
+                                    }
+                                }
+                            }
+
+                            let cleaned = content.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !cleaned.isEmpty {
+                                continuation.yield(.text(cleaned))
                             }
                             continuation.finish()
                             return
@@ -301,11 +321,20 @@ class BaseAgent {
                             // Extract and yield images from tool results
                             if let regex = imagePattern {
                                 let range = NSRange(result.startIndex..., in: result)
-                                for match in regex.matches(in: result, range: range) {
+                                let matches = regex.matches(in: result, range: range)
+                                for match in matches {
                                     if let pathRange = Range(match.range(at: 1), in: result) {
                                         let path = String(result[pathRange])
-                                        if let data = try? Data(contentsOf: URL(fileURLWithPath: path)) {
-                                            continuation.yield(.image(data, URL(fileURLWithPath: path).lastPathComponent))
+                                        Log.tools.info("Found image in tool result: \(path)")
+                                        if FileManager.default.fileExists(atPath: path) {
+                                            if let data = try? Data(contentsOf: URL(fileURLWithPath: path)) {
+                                                Log.tools.info("Yielding image: \(data.count) bytes")
+                                                continuation.yield(.image(data, URL(fileURLWithPath: path).lastPathComponent))
+                                            } else {
+                                                Log.tools.error("Failed to read image file: \(path)")
+                                            }
+                                        } else {
+                                            Log.tools.error("Image file not found: \(path)")
                                         }
                                     }
                                 }
