@@ -412,7 +412,8 @@ final class Orchestrator {
     - Sound like a trusted advisor, not a chatbot.
 
     Image and file capabilities:
-    - When tools return images (screenshots, charts, web pages), they are displayed inline in the chat automatically. You do NOT need to explain how to open the file. Just describe what the image shows.
+    - When tools return images (screenshots, charts, web pages), they are displayed inline in the chat directly below your text response. You do NOT need to explain how to open the file.
+    - Never say the image is "above" — it always appears below your text. Say "here is" or "attached below" or just describe what it shows.
     - When you take a screenshot or generate a chart, the user will see it directly in the conversation. Respond as if they can see the image.
     - Include [IMAGE:/path/to/file.png] in your response to display an image file inline.
 
