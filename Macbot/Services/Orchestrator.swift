@@ -8,6 +8,7 @@ final class Orchestrator {
     let embeddingRouter: EmbeddingRouter
     let memoryStore: MemoryStore
     let chunkStore: ChunkStore
+    let compositeToolStore: CompositeToolStore
     var modelConfig: ModelConfig
     var soulPrompt: String
 
@@ -91,6 +92,7 @@ final class Orchestrator {
         self.embeddingRouter = EmbeddingRouter(client: client, embeddingModel: modelConfig.embedding)
         self.memoryStore = MemoryStore()
         self.chunkStore = ChunkStore()
+        self.compositeToolStore = CompositeToolStore()
         self.modelConfig = modelConfig
         self.soulPrompt = soulPrompt ?? Self.defaultSoul
 
@@ -310,6 +312,7 @@ final class Orchestrator {
             if let agent = conv.agents[category] {
                 registerMemoryTools(on: agent)
                 registerRAGTools(on: agent)
+                await compositeToolStore.registerTools(on: agent.toolRegistry, executor: compositeToolStore)
                 await FileTools.register(on: agent.toolRegistry)
                 await WebTools.register(on: agent.toolRegistry)
                 await MacOSTools.register(on: agent.toolRegistry)
@@ -703,6 +706,33 @@ final class Orchestrator {
             mixtureOfAgentsEnabled.toggle()
             return "Mixture of Agents: \(mixtureOfAgentsEnabled ? "enabled" : "disabled")"
 
+        case "/workflows":
+            let tools = compositeToolStore.listAll()
+            if tools.isEmpty { return "No learned workflows. Use /learn to create one." }
+            return tools.map { t in
+                "• \(t.name) — \(t.description) (\(t.decodedSteps.count) steps, used \(t.timesUsed)x)"
+            }.joined(separator: "\n")
+
+        case "/learn":
+            guard !rest.isEmpty else {
+                return """
+                Usage: /learn <name> | <description> | <trigger phrase>
+                Then describe the steps in your next message.
+                Example: /learn deploy_app | Deploy the app to production | deploy the app
+                """
+            }
+            let parts = rest.components(separatedBy: " | ")
+            guard parts.count >= 3 else {
+                return "Format: /learn <name> | <description> | <trigger phrase>"
+            }
+            let name = parts[0].trimmingCharacters(in: .whitespaces)
+            let desc = parts[1].trimmingCharacters(in: .whitespaces)
+            let trigger = parts[2].trimmingCharacters(in: .whitespaces)
+
+            // For now, create an empty workflow that the agent can populate via tool calls
+            let id = compositeToolStore.save(name: name, description: desc, steps: [], triggerPhrase: trigger)
+            return "Created workflow '\(name)' (id=\(id)). Trigger: \"\(trigger)\"\nTeach me the steps by describing what to do, and I'll record the tool calls."
+
         case "/help":
             return """
             Commands:
@@ -715,6 +745,8 @@ final class Orchestrator {
               /ingest <path> — ingest file/directory into knowledge base
               /remember <text> — save to memory
               /memories [category] — list memories
+              /learn <name> | <desc> | <trigger> — create a reusable workflow
+              /workflows — list learned workflows
               /backend [mlx|ollama|hybrid] — switch inference backend
               /parallel — toggle parallel agent execution
               /moa — toggle Mixture of Agents

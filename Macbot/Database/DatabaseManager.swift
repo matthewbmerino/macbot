@@ -98,6 +98,20 @@ final class DatabaseManager {
             }
         }
 
+        // Composite tools (learned workflows)
+        migrator.registerMigration("v5_composite_tools") { db in
+            try db.create(table: "composite_tools") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("name", .text).notNull().unique()
+                t.column("description", .text).notNull()
+                t.column("steps", .text).notNull()
+                t.column("triggerPhrase", .text).notNull()
+                t.column("timesUsed", .integer).defaults(to: 0)
+                t.column("createdAt", .datetime).notNull()
+                t.column("updatedAt", .datetime).notNull()
+            }
+        }
+
         return migrator
     }
 }

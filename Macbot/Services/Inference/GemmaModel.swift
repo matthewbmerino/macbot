@@ -244,38 +244,54 @@ class GemmaMoELayer: Module {
         let seqLen = x.dim(1)
         let hiddenSize = x.dim(2)
 
-        // Flatten batch and sequence dimensions
         let flat = x.reshaped(-1, hiddenSize)  // [B*S, H]
         let numTokens = flat.dim(0)
 
         // Compute routing logits and select top-K experts per token
         let routerLogits = gate(flat)  // [B*S, num_experts]
         let sorted = argSort(routerLogits, axis: -1)
-        let topKIndices = sorted[0..., (numExperts - topK)...]  // top-K indices
+        let topKIndices = sorted[0..., (numExperts - topK)...]
         let topKLogits = takeAlong(routerLogits, topKIndices, axis: -1)
         let topKWeights = softMax(topKLogits, axis: -1)  // [B*S, K]
 
-        // Simple MoE: for each token, sum weighted expert outputs
-        // This processes one token at a time for correctness
-        var outputArrays: [MLXArray] = []
+        // Batched expert execution — group all tokens assigned to each expert,
+        // run them through the expert in one matmul, then scatter back.
+        // This is O(num_active_experts) forward passes instead of O(num_tokens * K).
+        var output = MLXArray.zeros([numTokens, hiddenSize])
+
+        // Build assignment matrix: for each expert, which (token, slot) pairs use it
+        var expertAssignments: [Int: [(token: Int, slot: Int)]] = [:]
+        eval(topKIndices)  // Materialize so we can read indices
 
         for t in 0..<numTokens {
-            let tokenInput = flat[t].reshaped(1, hiddenSize)
-            var tokenOutput = MLXArray.zeros([1, hiddenSize])
-
             for k in 0..<topK {
                 let expertIdx: Int = topKIndices[t, k].item(Int.self)
-                let weight = topKWeights[t, k]
-
                 guard expertIdx >= 0 && expertIdx < numExperts else { continue }
-                let expertOutput = experts[expertIdx](tokenInput)
-                tokenOutput = tokenOutput + expertOutput * weight
+                expertAssignments[expertIdx, default: []].append((t, k))
             }
-
-            outputArrays.append(tokenOutput)
         }
 
-        let output = concatenated(outputArrays, axis: 0)
+        // Process each active expert with its full batch
+        for (expertIdx, assignments) in expertAssignments {
+            guard !assignments.isEmpty else { continue }
+
+            // Gather all tokens for this expert
+            let tokenIndices = MLXArray(assignments.map { Int32($0.token) })
+            let expertInput = take(flat, tokenIndices, axis: 0)  // [N_expert, H]
+
+            // Single batched forward pass through the expert
+            let expertOutput = experts[expertIdx](expertInput)  // [N_expert, H]
+
+            // Gather the routing weights for these tokens at their respective slots
+            for (i, assignment) in assignments.enumerated() {
+                let weight = topKWeights[assignment.token, assignment.slot]
+                let weighted = expertOutput[i] * weight
+                // Accumulate into output
+                let current = output[assignment.token]
+                output[assignment.token] = current + weighted
+            }
+        }
+
         return output.reshaped(batchSize, seqLen, hiddenSize)
     }
 }

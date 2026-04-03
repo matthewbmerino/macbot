@@ -1,57 +1,65 @@
 import Foundation
+import MLX
 
-/// Manages pre-computed prompt token caches for agent system prompts.
-/// When using MLX, system prompts can be pre-tokenized and their KV cache states
-/// stored so subsequent turns skip re-encoding the system prefix.
+/// Manages pre-computed KV cache states for system prompts.
 ///
-/// For Ollama mode, this stores tokenized representations to avoid repeated
-/// token estimation on static prompt segments.
+/// When an agent's system prompt hasn't changed, we can skip re-encoding it
+/// by restoring the cached KV state. This saves re-processing 500+ tokens
+/// on every turn for each agent.
 actor PromptCacheManager {
     struct CacheEntry {
         let promptHash: Int
         let tokenCount: Int
+        let kvStates: [(keys: MLXArray, values: MLXArray)]  // Per-layer KV cache
         let cachedAt: Date
         var hitCount: Int = 0
     }
 
     private var cache: [String: CacheEntry] = [:]  // key: agent name
-    private let maxEntries = 10
+    private let maxEntries = 6
     private let ttl: TimeInterval = 3600  // 1 hour
 
-    /// Register a system prompt for an agent. Returns the token count.
-    func register(agentName: String, prompt: String, tokenCount: Int) -> CacheEntry {
+    /// Cache a KV state for an agent's system prompt.
+    func store(
+        agentName: String,
+        prompt: String,
+        tokenCount: Int,
+        kvStates: [(keys: MLXArray, values: MLXArray)]
+    ) {
         evictStale()
 
-        let entry = CacheEntry(
+        cache[agentName] = CacheEntry(
             promptHash: prompt.hashValue,
             tokenCount: tokenCount,
+            kvStates: kvStates,
             cachedAt: Date()
         )
-        cache[agentName] = entry
+
+        Log.inference.info("[prompt-cache] stored KV cache for '\(agentName)' (\(tokenCount) tokens, \(kvStates.count) layers)")
+    }
+
+    /// Retrieve cached KV states if the prompt hasn't changed.
+    func retrieve(agentName: String, prompt: String) -> CacheEntry? {
+        guard let entry = cache[agentName],
+              entry.promptHash == prompt.hashValue,
+              Date().timeIntervalSince(entry.cachedAt) < ttl
+        else { return nil }
+
+        cache[agentName]?.hitCount += 1
+        Log.inference.info("[prompt-cache] hit for '\(agentName)' (hit #\(entry.hitCount + 1))")
         return entry
     }
 
-    /// Check if a cached prompt is still valid (hasn't changed).
+    /// Check if a cached prompt is still valid.
     func isValid(agentName: String, prompt: String) -> Bool {
         guard let entry = cache[agentName] else { return false }
         return entry.promptHash == prompt.hashValue
             && Date().timeIntervalSince(entry.cachedAt) < ttl
     }
 
-    /// Record a cache hit for metrics.
-    func recordHit(agentName: String) {
-        cache[agentName]?.hitCount += 1
-    }
-
     /// Get cached token count for an agent's system prompt.
     func tokenCount(for agentName: String) -> Int? {
         cache[agentName]?.tokenCount
-    }
-
-    /// Get cache stats for monitoring.
-    func stats() -> [(agent: String, hits: Int, age: TimeInterval)] {
-        let now = Date()
-        return cache.map { ($0.key, $0.value.hitCount, now.timeIntervalSince($0.value.cachedAt)) }
     }
 
     func invalidate(agentName: String) {
@@ -60,6 +68,14 @@ actor PromptCacheManager {
 
     func invalidateAll() {
         cache.removeAll()
+    }
+
+    /// Get cache stats.
+    func stats() -> [(agent: String, hits: Int, tokens: Int, age: TimeInterval)] {
+        let now = Date()
+        return cache.map {
+            ($0.key, $0.value.hitCount, $0.value.tokenCount, now.timeIntervalSince($0.value.cachedAt))
+        }
     }
 
     private func evictStale() {
