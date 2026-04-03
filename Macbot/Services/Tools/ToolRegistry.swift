@@ -15,25 +15,43 @@ actor ToolRegistry {
 
     // Tool groups for deterministic pre-filtering
     private static let toolGroups: [String: (keywords: [String], tools: [String])] = [
-        "finance": (["stock", "price", "market", "ticker", "portfolio", "dow", "nasdaq"], ["get_stock_price", "get_stock_history", "get_market_summary"]),
+        "finance": (["stock", "price", "market", "ticker", "portfolio", "dow", "nasdaq", "s&p", "spy", "aapl", "goog", "msft", "tsla", "amzn", "nvda", "returns", "shares", "equity", "etf"], ["get_stock_price", "get_stock_history", "get_market_summary"]),
         "browser": (["browse", "website", "visit", "go to", "http://", "https://"], ["browse_url", "browse_and_act", "screenshot_url"]),
         "web": (["search", "look up", "find out", "what is", "who is", "latest", "news"], ["web_search", "fetch_page"]),
         "files": (["file", "read", "write", "folder", "directory", "create file"], ["read_file", "write_file", "list_directory", "search_files"]),
-        "chart": (["chart", "graph", "plot", "visualize", "diagram"], ["generate_chart"]),
+        "chart": (["chart", "graph", "plot", "visualize", "diagram", "show me", "display", "trend", "performance", "over time", "history", "historical", "ytd", "year to date", "monthly", "weekly", "daily"], ["generate_chart"]),
         "macos": (["screenshot", "clipboard", "open app", "volume", "notification", "what apps", "running apps", "battery", "system info"], ["take_screenshot", "open_app", "open_url", "send_notification", "get_clipboard", "set_clipboard", "list_running_apps", "get_system_info"]),
         "code": (["run python", "execute", "script", "run code"], ["run_python", "run_command"]),
         "memory": (["remember", "memory", "recall", "forget", "what do you know"], ["memory_save", "memory_recall", "memory_search", "memory_forget"]),
         "knowledge": (["document", "knowledge", "ingest", "rag", "what does the doc", "from my files", "in my notes"], ["ingest_file", "ingest_directory", "knowledge_search"]),
     ]
 
-    /// Filter tools to 3-5 relevant ones based on message content.
+    // Groups that commonly need each other — if one matches, include the other
+    private static let cooccurringGroups: [(String, String)] = [
+        ("finance", "chart"),   // Stock queries almost always need visualization
+        ("chart", "finance"),   // Chart requests about stocks need data
+        ("browser", "web"),     // Browsing often involves search
+    ]
+
+    /// Filter tools to relevant ones based on message content.
     func filteredSpecsAsJSON(for message: String, recentTools: [String] = []) -> [[String: Any]] {
         let lower = message.lowercased()
+        var matchedGroups = Set<String>()
         var matchedNames = Set<String>()
 
-        for (_, group) in Self.toolGroups {
+        for (groupName, group) in Self.toolGroups {
             if group.keywords.contains(where: { lower.contains($0) }) {
+                matchedGroups.insert(groupName)
                 matchedNames.formUnion(group.tools)
+            }
+        }
+
+        // Pull in co-occurring groups
+        for (from, to) in Self.cooccurringGroups {
+            if matchedGroups.contains(from), !matchedGroups.contains(to) {
+                if let group = Self.toolGroups[to] {
+                    matchedNames.formUnion(group.tools)
+                }
             }
         }
 

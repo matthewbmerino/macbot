@@ -17,7 +17,7 @@ class BaseAgent {
 
     // ReAct reflection — evaluate tool results before responding
     var reflectionEnabled: Bool = true
-    private let reflectionThreshold = 3  // Reflect after this many tool calls
+    private let reflectionThreshold = 5  // Reflect after this many tool calls
 
     // Human-readable tool labels for status updates
     static let toolLabels: [String: String] = [
