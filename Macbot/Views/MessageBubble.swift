@@ -70,6 +70,14 @@ struct MessageBubble: View {
             if let images = message.images, !images.isEmpty {
                 imageGrid(images)
             }
+
+            // Response metrics
+            if let metrics = message.metricsString {
+                Text(metrics)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .padding(.top, 2)
+            }
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 6)

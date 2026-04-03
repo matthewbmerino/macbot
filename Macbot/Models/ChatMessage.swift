@@ -16,6 +16,11 @@ struct ChatMessage: Identifiable {
     var agentCategory: AgentCategory?
     var timestamp: Date
 
+    // Response metrics (assistant messages only)
+    var responseTime: TimeInterval?  // Total time from send to complete
+    var tokenCount: Int?             // Estimated tokens in response
+    var tokensPerSecond: Double?     // Generation speed
+
     init(
         role: MessageRole,
         content: String,
@@ -30,6 +35,34 @@ struct ChatMessage: Identifiable {
         self.toolCalls = toolCalls
         self.agentCategory = agentCategory
         self.timestamp = Date()
+    }
+
+    /// Formatted metrics string for display (e.g., "1m 23s · 847 tokens · 42 tok/s")
+    var metricsString: String? {
+        guard role == .assistant, let time = responseTime, time > 0 else { return nil }
+
+        var parts: [String] = []
+
+        // Time
+        if time >= 60 {
+            let minutes = Int(time) / 60
+            let seconds = Int(time) % 60
+            parts.append("\(minutes)m \(seconds)s")
+        } else {
+            parts.append(String(format: "%.1fs", time))
+        }
+
+        // Tokens
+        if let tokens = tokenCount, tokens > 0 {
+            parts.append("\(tokens) tokens")
+        }
+
+        // Speed
+        if let tps = tokensPerSecond, tps > 0 {
+            parts.append(String(format: "%.0f tok/s", tps))
+        }
+
+        return parts.joined(separator: " · ")
     }
 
     /// Convert to Ollama API message format.

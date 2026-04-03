@@ -129,6 +129,7 @@ final class ChatViewModel {
         Task {
             var responseText = ""
             var agentCategory: AgentCategory?
+            let startTime = CFAbsoluteTimeGetCurrent()
 
             do {
                 for try await event in orchestrator.handleMessageStream(
@@ -156,7 +157,6 @@ final class ChatViewModel {
                                 last.images = imgs
                                 messages.append(last)
                             } else {
-                                // No assistant message yet — create one for the image
                                 var msg = ChatMessage(role: .assistant, content: "", agentCategory: agentCategory)
                                 msg.images = [data]
                                 messages.append(msg)
@@ -173,18 +173,30 @@ final class ChatViewModel {
                 }
             }
 
+            let elapsed = CFAbsoluteTimeGetCurrent() - startTime
+            let tokens = TokenEstimator.estimate(responseText)
+            let tps = elapsed > 0 ? Double(tokens) / elapsed : 0
+
             await MainActor.run {
                 if messages.last?.role != .assistant {
                     let fallback = responseText.isEmpty
                         ? "No response — Ollama may still be loading. Try again in a moment."
                         : responseText
-                    messages.append(ChatMessage(role: .assistant, content: fallback, agentCategory: agentCategory))
+                    var msg = ChatMessage(role: .assistant, content: fallback, agentCategory: agentCategory)
+                    msg.responseTime = elapsed
+                    msg.tokenCount = tokens
+                    msg.tokensPerSecond = tps
+                    messages.append(msg)
                     responseText = fallback
+                } else {
+                    // Update metrics on the existing message
+                    messages[messages.count - 1].responseTime = elapsed
+                    messages[messages.count - 1].tokenCount = tokens
+                    messages[messages.count - 1].tokensPerSecond = tps
                 }
                 isStreaming = false
                 currentStatus = nil
 
-                // Persist assistant message
                 chatStore.saveMessage(
                     chatId: chatId, role: "assistant", content: responseText,
                     agentCategory: agentCategory?.rawValue
