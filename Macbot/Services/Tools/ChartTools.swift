@@ -3,9 +3,9 @@ import Foundation
 enum ChartTools {
     static let generateChartSpec = ToolSpec(
         name: "generate_chart",
-        description: "Generate a professional chart using Plotly. Use for any data visualization: bar, line, pie, scatter, candlestick, etc. Write Plotly Python code. The chart will be styled with a modern dark theme automatically.",
+        description: "Generate a chart image using matplotlib. Write Python code that creates a plot and calls plt.savefig(OUTPUT_PATH). The chart is styled with a dark theme automatically. Use matplotlib.pyplot as plt. Do NOT call plt.show().",
         properties: [
-            "code": .init(type: "string", description: "Plotly Python code. Create a fig object. Do NOT call fig.show(). Example: fig = px.bar(x=['A','B'], y=[10,20])"),
+            "code": .init(type: "string", description: "Python matplotlib code. Use plt from matplotlib.pyplot. Call plt.savefig(OUTPUT_PATH) at the end. Example: plt.plot([1,2,3], [10,20,15]); plt.title('My Chart'); plt.savefig(OUTPUT_PATH)"),
             "title": .init(type: "string", description: "Brief description of the chart"),
         ],
         required: ["code"]
@@ -19,17 +19,25 @@ enum ChartTools {
     )
 
     private static let chartTheme = """
-    fig.update_layout(
-        template='plotly_dark',
-        paper_bgcolor='#0a0a0a',
-        plot_bgcolor='#0a0a0a',
-        font=dict(family='SF Pro Display, -apple-system, Helvetica Neue, sans-serif', color='#e8e8e8'),
-        title_font=dict(size=18, color='#e8e8e8'),
-        margin=dict(l=60, r=40, t=60, b=50),
-        colorway=['#6366f1', '#22c55e', '#f59e0b', '#ef4444', '#06b6d4', '#ec4899', '#8b5cf6', '#14b8a6'],
-        xaxis=dict(gridcolor='#1e1e1e', zerolinecolor='#2a2a2a'),
-        yaxis=dict(gridcolor='#1e1e1e', zerolinecolor='#2a2a2a'),
-    )
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    plt.style.use('dark_background')
+    plt.rcParams.update({
+        'figure.facecolor': '#0a0a0a',
+        'axes.facecolor': '#0a0a0a',
+        'axes.edgecolor': '#333333',
+        'axes.labelcolor': '#e8e8e8',
+        'text.color': '#e8e8e8',
+        'xtick.color': '#999999',
+        'ytick.color': '#999999',
+        'grid.color': '#1e1e1e',
+        'grid.alpha': 0.5,
+        'figure.figsize': (12, 7),
+        'font.size': 12,
+        'axes.grid': True,
+    })
+    OUTPUT_PATH = '%OUTPUT_PATH%'
     """
 
     static func register(on registry: ToolRegistry) async {
@@ -42,18 +50,26 @@ enum ChartTools {
     }
 
     static func generateChart(code: String, title: String) async -> String {
-        let chartPath = "/tmp/macbot_chart.png"
+        let chartId = UUID().uuidString.prefix(8)
+        let chartPath = "/tmp/macbot_chart_\(chartId).png"
+
+        // Inject theme with output path, then append user code
+        let themedSetup = chartTheme.replacingOccurrences(of: "%OUTPUT_PATH%", with: chartPath)
+
+        // Ensure the user code calls plt.savefig(OUTPUT_PATH)
+        // If they forgot, append it
+        var userCode = code
+        if !userCode.contains("savefig") {
+            userCode += "\nplt.tight_layout()\nplt.savefig(OUTPUT_PATH, dpi=150, bbox_inches='tight')"
+        }
 
         let fullCode = """
-        import plotly.graph_objects as go
-        import plotly.express as px
-        import numpy as np
+        \(themedSetup)
 
-        \(code)
+        \(userCode)
 
-        \(chartTheme)
-
-        fig.write_image('\(chartPath)', width=1200, height=700, scale=2)
+        plt.close('all')
+        print('OK')
         """
 
         let process = Process()
@@ -78,12 +94,28 @@ enum ChartTools {
                 return "Error: chart generation timed out"
             }
 
+            let stdout = String(data: outPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            let stderr = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+
             if FileManager.default.fileExists(atPath: chartPath) {
                 return "\(title)\n[IMAGE:\(chartPath)]"
             }
 
-            let err = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            return "Chart generation failed: \(err)"
+            // Provide actionable error
+            var errorMsg = "Chart generation failed."
+            if stderr.contains("No module named") {
+                let module = stderr.components(separatedBy: "No module named").last?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .replacingOccurrences(of: "'", with: "") ?? "unknown"
+                errorMsg += " Missing Python module: \(module). Install with: pip3 install \(module)"
+            } else if !stderr.isEmpty {
+                errorMsg += " \(String(stderr.prefix(500)))"
+            }
+            if !stdout.isEmpty && !stdout.contains("OK") {
+                errorMsg += " stdout: \(String(stdout.prefix(200)))"
+            }
+
+            return errorMsg
         } catch {
             return "Error: \(error.localizedDescription)"
         }
