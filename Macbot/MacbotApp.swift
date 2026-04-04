@@ -72,31 +72,38 @@ final class AppState {
     init() {
         authService.authenticate()
 
-        Task {
-            while !authService.isUnlocked {
+        Task.detached { [weak self] in
+            guard let self else { return }
+
+            while !self.authService.isUnlocked {
                 try? await Task.sleep(for: .milliseconds(300))
             }
-            await initialize()
-        }
-    }
 
-    @MainActor
-    func initialize() async {
-        let reachable = await orchestrator.client.isReachable()
-        if reachable {
-            self.chatViewModel = ChatViewModel(orchestrator: orchestrator)
-            self.isReady = true
+            // Check Ollama reachability off the main thread
+            let reachable = await self.orchestrator.client.isReachable()
 
-            QuickPanelController.shared.orchestrator = orchestrator
-            HotkeyManager.shared.registerDefaults {
-                QuickPanelController.shared.toggle()
+            // Hop to main thread only for UI state updates
+            await MainActor.run {
+                if reachable {
+                    self.chatViewModel = ChatViewModel(orchestrator: self.orchestrator)
+                    self.isReady = true
+
+                    QuickPanelController.shared.orchestrator = self.orchestrator
+                    HotkeyManager.shared.registerDefaults {
+                        QuickPanelController.shared.toggle()
+                    }
+
+                    Log.app.info("Macbot ready")
+                } else {
+                    // Still show the UI — Ollama might start later
+                    self.chatViewModel = ChatViewModel(orchestrator: self.orchestrator)
+                    self.isReady = true
+                    Log.app.warning("Ollama not reachable — running in MLX-only mode")
+                }
             }
 
-            Log.app.info("Macbot ready")
-
-            Task.detached(priority: .background) { [orchestrator = self.orchestrator] in
-                await orchestrator.prewarm()
-            }
+            // Prewarm models in background (never blocks UI)
+            await self.orchestrator.prewarm()
         }
     }
 }

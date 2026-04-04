@@ -126,7 +126,11 @@ final class ChatViewModel {
         // Persist user message
         chatStore.saveMessage(chatId: chatId, role: "user", content: messageText)
 
-        Task {
+        // Detach from MainActor so inference runs on a background thread.
+        // UI updates hop back to MainActor explicitly.
+        let uid = userId
+        Task.detached { [orchestrator, chatStore] in
+            let userId = uid
             var responseText = ""
             var agentCategory: AgentCategory?
             let startTime = CFAbsoluteTimeGetCurrent()
@@ -135,31 +139,31 @@ final class ChatViewModel {
                 for try await event in orchestrator.handleMessageStream(
                     userId: userId, message: messageText, images: attachedImages
                 ) {
-                    await MainActor.run {
+                    await MainActor.run { [self] in
                         switch event {
                         case .text(let chunk):
                             responseText += chunk
-                            currentStatus = nil
-                            updateLastAgentMessage(responseText, agent: agentCategory)
+                            self.currentStatus = nil
+                            self.updateLastAgentMessage(responseText, agent: agentCategory)
 
                         case .status(let status):
-                            currentStatus = status
+                            self.currentStatus = status
 
                         case .agentSelected(let category):
                             agentCategory = category
-                            activeAgent = category
+                            self.activeAgent = category
 
                         case .image(let data, _):
-                            if var last = messages.last, last.role == .assistant {
-                                messages.removeLast()
+                            if var last = self.messages.last, last.role == .assistant {
+                                self.messages.removeLast()
                                 var imgs = last.images ?? []
                                 imgs.append(data)
                                 last.images = imgs
-                                messages.append(last)
+                                self.messages.append(last)
                             } else {
                                 var msg = ChatMessage(role: .assistant, content: "", agentCategory: agentCategory)
                                 msg.images = [data]
-                                messages.append(msg)
+                                self.messages.append(msg)
                             }
                         }
                     }
@@ -167,8 +171,8 @@ final class ChatViewModel {
             } catch {
                 let errorMsg = "Something went wrong: \(error.localizedDescription)"
                 Log.agents.error("Chat error: \(error)")
-                await MainActor.run {
-                    updateLastAgentMessage(errorMsg, agent: agentCategory)
+                await MainActor.run { [self] in
+                    self.updateLastAgentMessage(errorMsg, agent: agentCategory)
                     responseText = errorMsg
                 }
             }
@@ -177,8 +181,8 @@ final class ChatViewModel {
             let tokens = TokenEstimator.estimate(responseText)
             let tps = elapsed > 0 ? Double(tokens) / elapsed : 0
 
-            await MainActor.run {
-                if messages.last?.role != .assistant {
+            await MainActor.run { [self] in
+                if self.messages.last?.role != .assistant {
                     let fallback = responseText.isEmpty
                         ? "No response — Ollama may still be loading. Try again in a moment."
                         : responseText
@@ -186,22 +190,20 @@ final class ChatViewModel {
                     msg.responseTime = elapsed
                     msg.tokenCount = tokens
                     msg.tokensPerSecond = tps
-                    messages.append(msg)
-                    responseText = fallback
+                    self.messages.append(msg)
                 } else {
-                    // Update metrics on the existing message
-                    messages[messages.count - 1].responseTime = elapsed
-                    messages[messages.count - 1].tokenCount = tokens
-                    messages[messages.count - 1].tokensPerSecond = tps
+                    self.messages[self.messages.count - 1].responseTime = elapsed
+                    self.messages[self.messages.count - 1].tokenCount = tokens
+                    self.messages[self.messages.count - 1].tokensPerSecond = tps
                 }
-                isStreaming = false
-                currentStatus = nil
+                self.isStreaming = false
+                self.currentStatus = nil
 
                 chatStore.saveMessage(
                     chatId: chatId, role: "assistant", content: responseText,
                     agentCategory: agentCategory?.rawValue
                 )
-                loadChatList()
+                self.loadChatList()
             }
         }
     }
