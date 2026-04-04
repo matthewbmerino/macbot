@@ -263,11 +263,14 @@ struct ChatView: View {
                 }
             }
 
-            // Floating input capsule
-            VStack(spacing: 0) {
+            // Activity terminal + floating input
+            VStack(spacing: 8) {
+                ActivityTerminal()
+
                 if !viewModel.pendingImages.isEmpty {
                     imagePreview
                 }
+
                 floatingInputBar
             }
             .padding(.horizontal, 24)

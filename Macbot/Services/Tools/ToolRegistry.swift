@@ -86,8 +86,12 @@ actor ToolRegistry {
 
     func execute(name: String, arguments: ToolArguments) async -> (String, String) {
         guard let handler = handlers[name] else {
+            ActivityLog.shared.log(.tool, "Unknown tool: \(name)")
             return (name, "Unknown tool: \(name)")
         }
+
+        let argsPreview = arguments.keys.joined(separator: ", ")
+        ActivityLog.shared.log(.tool, "Calling \(name)(\(argsPreview))...")
 
         // Fire pre-tool hook
         await HookSystem.shared.fireAsync(HookContext.make(
@@ -115,9 +119,12 @@ actor ToolRegistry {
                 event: .toolComplete, toolName: name, result: result
             ))
 
+            let preview = String(result.prefix(80)).replacingOccurrences(of: "\n", with: " ")
+            ActivityLog.shared.log(.tool, "\(name) → \(preview)")
             return (name, result)
         } catch is ToolError {
             let err = "Error: tool '\(name)' timed out after \(Int(Self.toolTimeout))s"
+            ActivityLog.shared.log(.tool, err)
             await HookSystem.shared.fireAsync(HookContext.make(
                 event: .toolError, toolName: name, error: err
             ))

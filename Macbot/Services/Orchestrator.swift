@@ -139,6 +139,7 @@ final class Orchestrator {
 
         let plan = needsPlanning(message)
         Log.agents.info("[orchestrator] user=\(userId) -> \(agent.name)\(plan ? " [PLANNING]" : "")")
+        ActivityLog.shared.log(.routing, "Routed to \(agent.name) agent\(plan ? " with planning" : "")")
 
         return try await agent.run(message, images: images, plan: plan)
     }
@@ -186,10 +187,16 @@ final class Orchestrator {
 
                     let plan = needsPlanning(message)
                     Log.agents.info("[orchestrator] user=\(userId) -> \(agent.name)\(plan ? " [PLANNING]" : "")")
+                    ActivityLog.shared.log(.routing, "Routed to \(agent.name) agent\(plan ? " with planning" : "")")
 
                     for try await event in agent.runStream(message, images: images, plan: plan) {
+                        // Log status events to the activity feed
+                        if case .status(let status) = event {
+                            ActivityLog.shared.log(.inference, status)
+                        }
                         continuation.yield(event)
                     }
+                    ActivityLog.shared.log(.inference, "Response complete")
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)
@@ -229,13 +236,16 @@ final class Orchestrator {
         }
 
         // Prefer embedding router (faster, more deterministic) with LLM fallback
+        ActivityLog.shared.log(.routing, "Classifying message...")
         let category = await embeddingRouter.classify(message: message, hasImages: hasImages)
 
         // If embedding router has low confidence, cross-check with LLM router
         if category == .general {
+            ActivityLog.shared.log(.routing, "Embedding → general, checking LLM router...")
             let llmCategory = await router.classify(message: message, hasImages: hasImages)
             if llmCategory != .general {
                 Log.agents.info("[orchestrator] embedding->general, LLM->\(llmCategory.rawValue), using LLM")
+                ActivityLog.shared.log(.routing, "LLM router → \(llmCategory.displayName)")
                 updateAffinity(conv: conv, category: llmCategory)
                 return llmCategory
             }
