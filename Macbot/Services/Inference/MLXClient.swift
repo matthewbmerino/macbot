@@ -674,6 +674,22 @@ final class MLXClient: InferenceProvider, @unchecked Sendable {
 
         Log.inference.info("[mlx] loaded \(allWeights.count) weight tensors")
 
+        // Detect quantization from config or weight keys
+        let quantConfig = configJSON["quantization"] as? [String: Any]
+            ?? (configJSON["text_config"] as? [String: Any])?["quantization"] as? [String: Any]
+        let groupSize = quantConfig?["group_size"] as? Int ?? 64
+        let bits = quantConfig?["bits"] as? Int ?? 4
+
+        // Check if weights are quantized (look for "scales" keys)
+        let hasQuantizedWeights = allWeights.keys.contains { $0.contains("scales") }
+
+        if hasQuantizedWeights {
+            // Swap all Linear layers to QuantizedLinear before loading weights.
+            // This ensures the weight shapes match (quantized weights are packed).
+            Log.inference.info("[mlx] quantized model detected (bits=\(bits), group_size=\(groupSize)), converting layers...")
+            quantize(model: model as! Module, groupSize: groupSize, bits: bits)
+        }
+
         let params = ModuleParameters.unflattened(allWeights)
         (model as! Module).update(parameters: params)
 
