@@ -38,10 +38,10 @@ struct MistralConfig {
 // MARK: - Mistral Attention
 
 class MistralAttention: Module {
-    let qProj: Linear
-    let kProj: Linear
-    let vProj: Linear
-    let oProj: Linear
+    @ModuleInfo var qProj: Linear
+    @ModuleInfo var kProj: Linear
+    @ModuleInfo var vProj: Linear
+    @ModuleInfo var oProj: Linear
     let numHeads: Int
     let numKVHeads: Int
     let headDim: Int
@@ -58,10 +58,10 @@ class MistralAttention: Module {
         self.scale = 1.0 / sqrt(Float(headDim))
         self.ropeTheta = config.ropeTheta
 
-        self.qProj = Linear(config.hiddenSize, numHeads * headDim, bias: false)
-        self.kProj = Linear(config.hiddenSize, numKVHeads * headDim, bias: false)
-        self.vProj = Linear(config.hiddenSize, numKVHeads * headDim, bias: false)
-        self.oProj = Linear(numHeads * headDim, config.hiddenSize, bias: false)
+        self._qProj.wrappedValue = Linear(config.hiddenSize, numHeads * headDim, bias: false)
+        self._kProj.wrappedValue = Linear(config.hiddenSize, numKVHeads * headDim, bias: false)
+        self._vProj.wrappedValue = Linear(config.hiddenSize, numKVHeads * headDim, bias: false)
+        self._oProj.wrappedValue = Linear(numHeads * headDim, config.hiddenSize, bias: false)
 
         super.init()
     }
@@ -111,14 +111,14 @@ class MistralAttention: Module {
 // MARK: - Mistral MLP (SwiGLU — same as Qwen/LLaMA)
 
 class MistralMLP: Module {
-    let gateProj: Linear
-    let upProj: Linear
-    let downProj: Linear
+    @ModuleInfo var gateProj: Linear
+    @ModuleInfo var upProj: Linear
+    @ModuleInfo var downProj: Linear
 
     init(hiddenSize: Int, intermediateSize: Int) {
-        self.gateProj = Linear(hiddenSize, intermediateSize, bias: false)
-        self.upProj = Linear(hiddenSize, intermediateSize, bias: false)
-        self.downProj = Linear(intermediateSize, hiddenSize, bias: false)
+        self._gateProj.wrappedValue = Linear(hiddenSize, intermediateSize, bias: false)
+        self._upProj.wrappedValue = Linear(hiddenSize, intermediateSize, bias: false)
+        self._downProj.wrappedValue = Linear(intermediateSize, hiddenSize, bias: false)
         super.init()
     }
 
@@ -130,16 +130,16 @@ class MistralMLP: Module {
 // MARK: - Mistral Decoder Layer
 
 class MistralDecoderLayer: Module {
-    let selfAttn: MistralAttention
-    let mlp: MistralMLP
-    let inputLayernorm: RMSNorm
-    let postAttentionLayernorm: RMSNorm
+    @ModuleInfo var selfAttn: MistralAttention
+    @ModuleInfo var mlp: MistralMLP
+    @ModuleInfo var inputLayernorm: RMSNorm
+    @ModuleInfo var postAttentionLayernorm: RMSNorm
 
     init(config: MistralConfig) {
-        self.selfAttn = MistralAttention(config: config)
-        self.mlp = MistralMLP(hiddenSize: config.hiddenSize, intermediateSize: config.intermediateSize)
-        self.inputLayernorm = RMSNorm(dimensions: config.hiddenSize, eps: config.rmsNormEps)
-        self.postAttentionLayernorm = RMSNorm(dimensions: config.hiddenSize, eps: config.rmsNormEps)
+        self._selfAttn.wrappedValue = MistralAttention(config: config)
+        self._mlp.wrappedValue = MistralMLP(hiddenSize: config.hiddenSize, intermediateSize: config.intermediateSize)
+        self._inputLayernorm.wrappedValue = RMSNorm(dimensions: config.hiddenSize, eps: config.rmsNormEps)
+        self._postAttentionLayernorm.wrappedValue = RMSNorm(dimensions: config.hiddenSize, eps: config.rmsNormEps)
         super.init()
     }
 
@@ -163,20 +163,20 @@ class MistralDecoderLayer: Module {
 // MARK: - Full Mistral Model
 
 class MistralModel: Module {
-    let embedTokens: Embedding
-    let layers: [MistralDecoderLayer]
-    let norm: RMSNorm
-    let lmHead: Linear
+    @ModuleInfo var embedTokens: Embedding
+    @ModuleInfo var layers: [MistralDecoderLayer]
+    @ModuleInfo var norm: RMSNorm
+    @ModuleInfo var lmHead: Linear
     let vocabSize: Int
 
     init(config: MistralConfig) {
         self.vocabSize = config.vocabSize
-        self.embedTokens = Embedding(embeddingCount: config.vocabSize, dimensions: config.hiddenSize)
-        self.layers = (0..<config.numHiddenLayers).map { _ in
+        self._embedTokens.wrappedValue = Embedding(embeddingCount: config.vocabSize, dimensions: config.hiddenSize)
+        self._layers.wrappedValue = (0..<config.numHiddenLayers).map { _ in
             MistralDecoderLayer(config: config)
         }
-        self.norm = RMSNorm(dimensions: config.hiddenSize, eps: config.rmsNormEps)
-        self.lmHead = Linear(config.hiddenSize, config.vocabSize, bias: false)
+        self._norm.wrappedValue = RMSNorm(dimensions: config.hiddenSize, eps: config.rmsNormEps)
+        self._lmHead.wrappedValue = Linear(config.hiddenSize, config.vocabSize, bias: false)
         super.init()
     }
 

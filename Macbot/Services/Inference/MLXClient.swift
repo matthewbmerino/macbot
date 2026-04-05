@@ -98,17 +98,16 @@ class RMSNorm: Module, UnaryLayer {
 
 /// Multi-head attention with RoPE for Qwen2.
 class QwenAttention: Module {
-    let qProj: Linear
-    let kProj: Linear
-    let vProj: Linear
-    let oProj: Linear
+    @ModuleInfo var qProj: Linear
+    @ModuleInfo var kProj: Linear
+    @ModuleInfo var vProj: Linear
+    @ModuleInfo var oProj: Linear
     let numHeads: Int
     let numKVHeads: Int
     let headDim: Int
     let scale: Float
     let ropeTheta: Float
 
-    // KV cache for incremental decoding
     var keyCache: MLXArray?
     var valueCache: MLXArray?
 
@@ -119,10 +118,10 @@ class QwenAttention: Module {
         self.scale = 1.0 / sqrt(Float(headDim))
         self.ropeTheta = ropeTheta
 
-        self.qProj = Linear(hiddenSize, numHeads * headDim, bias: true)
-        self.kProj = Linear(hiddenSize, numKVHeads * headDim, bias: true)
-        self.vProj = Linear(hiddenSize, numKVHeads * headDim, bias: true)
-        self.oProj = Linear(numHeads * headDim, hiddenSize, bias: false)
+        self._qProj.wrappedValue = Linear(hiddenSize, numHeads * headDim, bias: true)
+        self._kProj.wrappedValue = Linear(hiddenSize, numKVHeads * headDim, bias: true)
+        self._vProj.wrappedValue = Linear(hiddenSize, numKVHeads * headDim, bias: true)
+        self._oProj.wrappedValue = Linear(numHeads * headDim, hiddenSize, bias: false)
 
         super.init()
     }
@@ -172,14 +171,14 @@ class QwenAttention: Module {
 
 /// Feed-forward network (SwiGLU) for Qwen2.
 class QwenMLP: Module {
-    let gateProj: Linear
-    let upProj: Linear
-    let downProj: Linear
+    @ModuleInfo var gateProj: Linear
+    @ModuleInfo var upProj: Linear
+    @ModuleInfo var downProj: Linear
 
     init(hiddenSize: Int, intermediateSize: Int) {
-        self.gateProj = Linear(hiddenSize, intermediateSize, bias: false)
-        self.upProj = Linear(hiddenSize, intermediateSize, bias: false)
-        self.downProj = Linear(intermediateSize, hiddenSize, bias: false)
+        self._gateProj.wrappedValue = Linear(hiddenSize, intermediateSize, bias: false)
+        self._upProj.wrappedValue = Linear(hiddenSize, intermediateSize, bias: false)
+        self._downProj.wrappedValue = Linear(intermediateSize, hiddenSize, bias: false)
         super.init()
     }
 
@@ -190,16 +189,16 @@ class QwenMLP: Module {
 
 /// Single transformer decoder layer for Qwen2.
 class QwenDecoderLayer: Module {
-    let selfAttn: QwenAttention
-    let mlp: QwenMLP
-    let inputLayernorm: RMSNorm
-    let postAttentionLayernorm: RMSNorm
+    @ModuleInfo var selfAttn: QwenAttention
+    @ModuleInfo var mlp: QwenMLP
+    @ModuleInfo var inputLayernorm: RMSNorm
+    @ModuleInfo var postAttentionLayernorm: RMSNorm
 
     init(hiddenSize: Int, intermediateSize: Int, numHeads: Int, numKVHeads: Int, rmsNormEps: Float, ropeTheta: Float) {
-        self.selfAttn = QwenAttention(hiddenSize: hiddenSize, numHeads: numHeads, numKVHeads: numKVHeads, ropeTheta: ropeTheta)
-        self.mlp = QwenMLP(hiddenSize: hiddenSize, intermediateSize: intermediateSize)
-        self.inputLayernorm = RMSNorm(dimensions: hiddenSize, eps: rmsNormEps)
-        self.postAttentionLayernorm = RMSNorm(dimensions: hiddenSize, eps: rmsNormEps)
+        self._selfAttn.wrappedValue = QwenAttention(hiddenSize: hiddenSize, numHeads: numHeads, numKVHeads: numKVHeads, ropeTheta: ropeTheta)
+        self._mlp.wrappedValue = QwenMLP(hiddenSize: hiddenSize, intermediateSize: intermediateSize)
+        self._inputLayernorm.wrappedValue = RMSNorm(dimensions: hiddenSize, eps: rmsNormEps)
+        self._postAttentionLayernorm.wrappedValue = RMSNorm(dimensions: hiddenSize, eps: rmsNormEps)
         super.init()
     }
 
@@ -222,10 +221,10 @@ class QwenDecoderLayer: Module {
 
 /// Full Qwen2 decoder model.
 class QwenModel: Module {
-    let embedTokens: Embedding
-    let layers: [QwenDecoderLayer]
-    let norm: RMSNorm
-    let lmHead: Linear
+    @ModuleInfo var embedTokens: Embedding
+    @ModuleInfo var layers: [QwenDecoderLayer]
+    @ModuleInfo var norm: RMSNorm
+    @ModuleInfo var lmHead: Linear
     let vocabSize: Int
 
     struct Config {
@@ -255,8 +254,8 @@ class QwenModel: Module {
 
     init(config: Config) {
         self.vocabSize = config.vocabSize
-        self.embedTokens = Embedding(embeddingCount: config.vocabSize, dimensions: config.hiddenSize)
-        self.layers = (0..<config.numHiddenLayers).map { _ in
+        self._embedTokens.wrappedValue = Embedding(embeddingCount: config.vocabSize, dimensions: config.hiddenSize)
+        self._layers.wrappedValue = (0..<config.numHiddenLayers).map { _ in
             QwenDecoderLayer(
                 hiddenSize: config.hiddenSize,
                 intermediateSize: config.intermediateSize,
@@ -266,8 +265,8 @@ class QwenModel: Module {
                 ropeTheta: config.ropeTheta
             )
         }
-        self.norm = RMSNorm(dimensions: config.hiddenSize, eps: config.rmsNormEps)
-        self.lmHead = Linear(config.hiddenSize, config.vocabSize, bias: false)
+        self._norm.wrappedValue = RMSNorm(dimensions: config.hiddenSize, eps: config.rmsNormEps)
+        self._lmHead.wrappedValue = Linear(config.hiddenSize, config.vocabSize, bias: false)
         super.init()
     }
 

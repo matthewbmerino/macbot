@@ -86,10 +86,10 @@ class GemmaRMSNorm: Module, UnaryLayer {
 
 /// Hybrid attention: sliding window (most layers) or full global (6 layers).
 class GemmaAttention: Module {
-    let qProj: Linear
-    let kProj: Linear
-    let vProj: Linear
-    let oProj: Linear
+    @ModuleInfo var qProj: Linear
+    @ModuleInfo var kProj: Linear
+    @ModuleInfo var vProj: Linear
+    @ModuleInfo var oProj: Linear
     let numHeads: Int
     let numKVHeads: Int
     let headDim: Int
@@ -109,15 +109,13 @@ class GemmaAttention: Module {
         self.scale = 1.0 / sqrt(Float(headDim))
         self.isFullAttention = config.fullAttentionLayers.contains(layerIndex)
         self.slidingWindowSize = config.slidingWindowSize
-
-        // Dual RoPE: global layers use 1M theta, sliding layers use 10K
         self.ropeTheta = isFullAttention ? config.ropeTheta : 10000.0
         self.partialRotaryFactor = isFullAttention ? config.partialRotaryFactor : 1.0
 
-        self.qProj = Linear(config.hiddenSize, numHeads * headDim, bias: false)
-        self.kProj = Linear(config.hiddenSize, numKVHeads * headDim, bias: false)
-        self.vProj = Linear(config.hiddenSize, numKVHeads * headDim, bias: false)
-        self.oProj = Linear(numHeads * headDim, config.hiddenSize, bias: false)
+        self._qProj.wrappedValue = Linear(config.hiddenSize, numHeads * headDim, bias: false)
+        self._kProj.wrappedValue = Linear(config.hiddenSize, numKVHeads * headDim, bias: false)
+        self._vProj.wrappedValue = Linear(config.hiddenSize, numKVHeads * headDim, bias: false)
+        self._oProj.wrappedValue = Linear(numHeads * headDim, config.hiddenSize, bias: false)
 
         super.init()
     }
@@ -183,14 +181,14 @@ class GemmaAttention: Module {
 
 /// Dense feed-forward used in non-MoE layers or as the base FFN.
 class GemmaMLP: Module {
-    let gateProj: Linear
-    let upProj: Linear
-    let downProj: Linear
+    @ModuleInfo var gateProj: Linear
+    @ModuleInfo var upProj: Linear
+    @ModuleInfo var downProj: Linear
 
     init(hiddenSize: Int, intermediateSize: Int) {
-        self.gateProj = Linear(hiddenSize, intermediateSize, bias: false)
-        self.upProj = Linear(hiddenSize, intermediateSize, bias: false)
-        self.downProj = Linear(intermediateSize, hiddenSize, bias: false)
+        self._gateProj.wrappedValue = Linear(hiddenSize, intermediateSize, bias: false)
+        self._upProj.wrappedValue = Linear(hiddenSize, intermediateSize, bias: false)
+        self._downProj.wrappedValue = Linear(intermediateSize, hiddenSize, bias: false)
         super.init()
     }
 
@@ -204,14 +202,14 @@ class GemmaMLP: Module {
 
 /// Single expert in the Mixture of Experts layer.
 class GemmaExpert: Module {
-    let gateProj: Linear
-    let upProj: Linear
-    let downProj: Linear
+    @ModuleInfo var gateProj: Linear
+    @ModuleInfo var upProj: Linear
+    @ModuleInfo var downProj: Linear
 
     init(hiddenSize: Int, intermediateSize: Int) {
-        self.gateProj = Linear(hiddenSize, intermediateSize, bias: false)
-        self.upProj = Linear(hiddenSize, intermediateSize, bias: false)
-        self.downProj = Linear(intermediateSize, hiddenSize, bias: false)
+        self._gateProj.wrappedValue = Linear(hiddenSize, intermediateSize, bias: false)
+        self._upProj.wrappedValue = Linear(hiddenSize, intermediateSize, bias: false)
+        self._downProj.wrappedValue = Linear(intermediateSize, hiddenSize, bias: false)
         super.init()
     }
 
@@ -223,8 +221,8 @@ class GemmaExpert: Module {
 /// Mixture of Experts routing layer.
 /// Routes each token to its top-K experts via a learned gating network.
 class GemmaMoELayer: Module {
-    let gate: Linear          // [hidden_size, num_experts] — routing logits
-    let experts: [GemmaExpert]
+    @ModuleInfo var gate: Linear
+    @ModuleInfo var experts: [GemmaExpert]
     let numExperts: Int
     let topK: Int
 
@@ -232,8 +230,8 @@ class GemmaMoELayer: Module {
         self.numExperts = config.numExperts
         self.topK = config.topKExperts
 
-        self.gate = Linear(config.hiddenSize, config.numExperts, bias: false)
-        self.experts = (0..<config.numExperts).map { _ in
+        self._gate.wrappedValue = Linear(config.hiddenSize, config.numExperts, bias: false)
+        self._experts.wrappedValue = (0..<config.numExperts).map { _ in
             GemmaExpert(hiddenSize: config.hiddenSize, intermediateSize: config.moeIntermediateSize)
         }
         super.init()
@@ -300,25 +298,24 @@ class GemmaMoELayer: Module {
 
 /// Single transformer decoder layer — contains attention + MoE/Dense FFN.
 class GemmaDecoderLayer: Module {
-    let selfAttn: GemmaAttention
-    let mlp: GemmaMLP              // Dense FFN (MoE layers use moeLayer instead)
-    let moeLayer: GemmaMoELayer?   // Present only on MoE layers
-    let inputLayernorm: GemmaRMSNorm
-    let postAttentionLayernorm: GemmaRMSNorm
-    let preFeedforwardLayernorm: GemmaRMSNorm
-    let postFeedforwardLayernorm: GemmaRMSNorm
+    @ModuleInfo var selfAttn: GemmaAttention
+    @ModuleInfo var mlp: GemmaMLP
+    @ModuleInfo var moeLayer: GemmaMoELayer?
+    @ModuleInfo var inputLayernorm: GemmaRMSNorm
+    @ModuleInfo var postAttentionLayernorm: GemmaRMSNorm
+    @ModuleInfo var preFeedforwardLayernorm: GemmaRMSNorm
+    @ModuleInfo var postFeedforwardLayernorm: GemmaRMSNorm
     let isMoE: Bool
 
     init(config: GemmaConfig, layerIndex: Int, useMoE: Bool) {
-        self.selfAttn = GemmaAttention(config: config, layerIndex: layerIndex)
         self.isMoE = useMoE
-        self.inputLayernorm = GemmaRMSNorm(dimensions: config.hiddenSize, eps: config.rmsNormEps)
-        self.postAttentionLayernorm = GemmaRMSNorm(dimensions: config.hiddenSize, eps: config.rmsNormEps)
-        self.preFeedforwardLayernorm = GemmaRMSNorm(dimensions: config.hiddenSize, eps: config.rmsNormEps)
-        self.postFeedforwardLayernorm = GemmaRMSNorm(dimensions: config.hiddenSize, eps: config.rmsNormEps)
-
-        self.mlp = GemmaMLP(hiddenSize: config.hiddenSize, intermediateSize: config.intermediateSize)
-        self.moeLayer = useMoE ? GemmaMoELayer(config: config) : nil
+        self._selfAttn.wrappedValue = GemmaAttention(config: config, layerIndex: layerIndex)
+        self._inputLayernorm.wrappedValue = GemmaRMSNorm(dimensions: config.hiddenSize, eps: config.rmsNormEps)
+        self._postAttentionLayernorm.wrappedValue = GemmaRMSNorm(dimensions: config.hiddenSize, eps: config.rmsNormEps)
+        self._preFeedforwardLayernorm.wrappedValue = GemmaRMSNorm(dimensions: config.hiddenSize, eps: config.rmsNormEps)
+        self._postFeedforwardLayernorm.wrappedValue = GemmaRMSNorm(dimensions: config.hiddenSize, eps: config.rmsNormEps)
+        self._mlp.wrappedValue = GemmaMLP(hiddenSize: config.hiddenSize, intermediateSize: config.intermediateSize)
+        self._moeLayer.wrappedValue = useMoE ? GemmaMoELayer(config: config) : nil
 
         super.init()
     }
@@ -352,10 +349,10 @@ class GemmaDecoderLayer: Module {
 
 /// Complete Gemma 4 decoder model with MoE support.
 class GemmaModel: Module {
-    let embedTokens: Embedding
-    let layers: [GemmaDecoderLayer]
-    let norm: GemmaRMSNorm
-    let lmHead: Linear?  // Gemma ties embeddings to output if no separate lm_head
+    @ModuleInfo var embedTokens: Embedding
+    @ModuleInfo var layers: [GemmaDecoderLayer]
+    @ModuleInfo var norm: GemmaRMSNorm
+    @ModuleInfo var lmHead: Linear?
     let vocabSize: Int
     let hiddenSize: Int
     let tiedEmbeddings: Bool
@@ -363,19 +360,17 @@ class GemmaModel: Module {
     init(config: GemmaConfig) {
         self.vocabSize = config.vocabSize
         self.hiddenSize = config.hiddenSize
-        self.embedTokens = Embedding(embeddingCount: config.vocabSize, dimensions: config.hiddenSize)
+        self._embedTokens.wrappedValue = Embedding(embeddingCount: config.vocabSize, dimensions: config.hiddenSize)
 
         // Build layers — all use MoE for Gemma 4 A4B
-        self.layers = (0..<config.numHiddenLayers).map { i in
+        self._layers.wrappedValue = (0..<config.numHiddenLayers).map { i in
             GemmaDecoderLayer(config: config, layerIndex: i, useMoE: config.numExperts > 1)
         }
 
-        self.norm = GemmaRMSNorm(dimensions: config.hiddenSize, eps: config.rmsNormEps)
+        self._norm.wrappedValue = GemmaRMSNorm(dimensions: config.hiddenSize, eps: config.rmsNormEps)
 
-        // Gemma typically ties embedding weights with output projection
-        // Check if lm_head weights exist separately after loading
         self.tiedEmbeddings = true
-        self.lmHead = nil
+        self._lmHead.wrappedValue = nil
 
         super.init()
     }
