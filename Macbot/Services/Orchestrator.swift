@@ -88,6 +88,48 @@ final class Orchestrator {
         memoryStore.embeddingModel = modelConfig.embedding
     }
 
+    /// Validate that all configured models are installed in Ollama.
+    /// Falls back to known-good defaults for any missing model.
+    func validateModels() async {
+        let fallbacks: [String: String] = [
+            "general": "qwen3.5:9b",
+            "coder": "qwen3.5:9b",
+            "vision": "qwen3-vl:8b",
+            "reasoner": "qwen3.5:9b",
+            "router": "qwen3.5:0.8b",
+            "embedding": "qwen3-embedding:0.6b",
+        ]
+
+        guard let models = try? await client.listModels() else { return }
+        let installed = Set(models.map(\.name))
+
+        let check = { (model: String) -> Bool in
+            installed.contains(model) || installed.contains(model + ":latest")
+        }
+
+        if !check(self.modelConfig.general) {
+            Log.app.warning("[orchestrator] \(self.modelConfig.general) not found, falling back")
+            self.modelConfig.general = fallbacks["general"]!
+        }
+        if !check(self.modelConfig.coder) {
+            Log.app.warning("[orchestrator] \(self.modelConfig.coder) not found, falling back")
+            self.modelConfig.coder = fallbacks["coder"]!
+        }
+        if !check(self.modelConfig.vision) {
+            Log.app.warning("[orchestrator] \(self.modelConfig.vision) not found, falling back")
+            self.modelConfig.vision = fallbacks["vision"]!
+        }
+        if !check(self.modelConfig.reasoner) {
+            Log.app.warning("[orchestrator] \(self.modelConfig.reasoner) not found, falling back")
+            self.modelConfig.reasoner = fallbacks["reasoner"]!
+        }
+
+        // Persist the validated config so stale model names don't survive restarts
+        modelConfig.save()
+
+        Log.app.info("[orchestrator] models validated: general=\(self.modelConfig.general), coder=\(self.modelConfig.coder), vision=\(self.modelConfig.vision), reasoner=\(self.modelConfig.reasoner)")
+    }
+
     // MARK: - Public API
 
     func handleMessage(userId: String, message: String, images: [Data]? = nil) async throws -> String {

@@ -94,7 +94,8 @@ final class AppState {
                 }
             }
 
-            // Prewarm models in background (never blocks UI)
+            // Validate models exist, then prewarm
+            await self.orchestrator.validateModels()
             await self.orchestrator.prewarm()
         }
     }

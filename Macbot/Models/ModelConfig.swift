@@ -1,9 +1,9 @@
 import Foundation
 
 struct ModelConfig: Codable {
-    var general: String = "gemma4:e4b"
+    var general: String = "qwen3.5:9b"
     var coder: String = "devstral-small-2"
-    var vision: String = "gemma4:e4b"       // Gemma 4 has native vision — no separate model needed
+    var vision: String = "qwen3-vl:8b"
     var reasoner: String = "deepseek-r1:14b"
     var router: String = "qwen3.5:0.8b"
     var embedding: String = "qwen3-embedding:0.6b"
