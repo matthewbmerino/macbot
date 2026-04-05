@@ -229,10 +229,9 @@ struct ChatView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     if viewModel.messages.isEmpty {
-                        GeometryReader { geo in
-                            emptyState
-                                .frame(width: geo.size.width, height: geo.size.height)
-                        }
+                        emptyState
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .containerRelativeFrame(.vertical) { height, _ in height }
                     } else {
                         LazyVStack(alignment: .leading, spacing: 4) {
                             ForEach(viewModel.messages) { msg in
