@@ -12,8 +12,10 @@ final class Orchestrator {
     var modelConfig: ModelConfig
     var soulPrompt: String
 
-    /// Which inference backend to use
-    var inferenceBackend: InferenceBackend = .hybrid
+    /// Which inference backend to use.
+    /// Default to Ollama until MLX weight loading is fully validated.
+    /// Switch to .hybrid or .mlx via /backend command when ready.
+    var inferenceBackend: InferenceBackend = .ollama
 
     enum InferenceBackend: String {
         case ollama    // Standard Ollama HTTP

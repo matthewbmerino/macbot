@@ -417,6 +417,16 @@ final class MLXClient: InferenceProvider, @unchecked Sendable {
                 temperature: temperature, maxTokens: min(2048, numCtx / 4)
             )
 
+            // Detect garbage output (repetitive single characters = broken weights)
+            if isGarbageOutput(output) {
+                Log.inference.warning("[mlx] garbage output detected, falling back to Ollama")
+                ActivityLog.shared.log(.inference, "MLX output invalid, falling back to Ollama")
+                if let fallback {
+                    return try await fallback.chat(model: model, messages: messages, tools: tools,
+                                                   temperature: temperature, numCtx: numCtx, timeout: timeout)
+                }
+            }
+
             let elapsed = CFAbsoluteTimeGetCurrent() - startTime
             let tokenCount = TokenEstimator.estimate(output)
             self.lastTokensPerSecond = Double(tokenCount) / max(elapsed, 0.001)
@@ -900,6 +910,34 @@ final class MLXClient: InferenceProvider, @unchecked Sendable {
                 }
             }
         }
+    }
+
+    // MARK: - Output Validation
+
+    /// Detect garbage output from broken weight loading.
+    /// Garbage typically looks like repeated single characters: "!!!!!!!", "??????", "........"
+    private func isGarbageOutput(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 10 else { return trimmed.isEmpty }
+
+        // Check if dominated by a single repeated character
+        var charCounts: [Character: Int] = [:]
+        for ch in trimmed { charCounts[ch, default: 0] += 1 }
+        if let (topChar, topCount) = charCounts.max(by: { $0.value < $1.value }) {
+            let ratio = Double(topCount) / Double(trimmed.count)
+            // If one character is >60% of the output and it's punctuation, it's garbage
+            if ratio > 0.6 && !topChar.isLetter && !topChar.isNumber {
+                return true
+            }
+        }
+
+        // Check for very low unique character ratio (< 5 unique chars in 50+ chars)
+        if trimmed.count > 50 {
+            let unique = Set(trimmed).count
+            if unique < 5 { return true }
+        }
+
+        return false
     }
 
     // MARK: - Sampling
