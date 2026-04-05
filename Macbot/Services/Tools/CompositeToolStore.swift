@@ -54,13 +54,23 @@ final class CompositeToolStore {
             steps: stepsJSON, triggerPhrase: triggerPhrase,
             timesUsed: 0, createdAt: now, updatedAt: now
         )
-        try! db.write { db in try tool.insert(db) }
-        return tool.id!
+        do {
+            try db.write { db in try tool.insert(db) }
+        } catch {
+            Log.app.error("[composite] save failed: \(error)")
+            return 0
+        }
+        return tool.id ?? 0
     }
 
     func find(name: String) -> CompositeTool? {
-        try! db.read { db in
-            try CompositeTool.filter(Column("name") == name).fetchOne(db)
+        do {
+            return try db.read { db in
+                try CompositeTool.filter(Column("name") == name).fetchOne(db)
+            }
+        } catch {
+            Log.app.error("[composite] find failed: \(error)")
+            return nil
         }
     }
 

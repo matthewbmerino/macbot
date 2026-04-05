@@ -3,7 +3,7 @@ import Foundation
 @Observable
 final class Orchestrator {
     let client: OllamaClient
-    let mlxClient: MLXClient?
+    // MLX client retained for future use — not in the inference path
     let router: Router
     let embeddingRouter: EmbeddingRouter
     let memoryStore: MemoryStore
@@ -74,7 +74,7 @@ final class Orchestrator {
         soulPrompt: String? = nil
     ) {
         self.client = OllamaClient(host: host)
-        self.mlxClient = MLXClient(fallback: client)
+        // MLX client available but not in hot path — all inference via Ollama
         self.router = Router(client: client, model: modelConfig.router)
         self.embeddingRouter = EmbeddingRouter(client: client, embeddingModel: modelConfig.embedding)
         self.memoryStore = MemoryStore()
@@ -628,156 +628,7 @@ final class Orchestrator {
     // MARK: - Commands
 
     private func handleCommand(conv: ConversationState, message: String) async throws -> String {
-        let parts = message.split(maxSplits: 1, whereSeparator: \.isWhitespace)
-        let cmd = String(parts[0]).lowercased()
-        let rest = parts.count > 1 ? String(parts[1]) : ""
-
-        switch cmd {
-        case "/clear":
-            for (_, agent) in conv.agents { agent.clearHistory() }
-            return "Conversation cleared."
-
-        case "/status":
-            let models = try await client.listModels()
-            let names = models.map(\.name).joined(separator: ", ")
-            let memCount = memoryStore.recall(limit: 1000).count
-            let chunkCount = chunkStore.totalChunkCount()
-            let ingestedFiles = chunkStore.ingestedFiles()
-            return """
-            Models: \(names)
-            Agent: \(conv.currentAgent.displayName)
-            Backend: Ollama (llama.cpp Metal)
-            Memories: \(memCount) (vector-indexed)
-            Knowledge base: \(chunkCount) chunks from \(ingestedFiles.count) files
-            Parallel agents: \(parallelAgentsEnabled ? "on" : "off")
-            Mixture of Agents: \(mixtureOfAgentsEnabled ? "on" : "off")
-            Conversations: \(conversations.count)
-            """
-
-        case "/code", "/coder":
-            conv.currentAgent = .coder
-            guard !rest.isEmpty, let agent = conv.agents[.coder] else { return "Switched to coder." }
-            return try await agent.run(rest)
-
-        case "/think", "/reason":
-            conv.currentAgent = .reasoner
-            guard !rest.isEmpty, let agent = conv.agents[.reasoner] else { return "Switched to reasoner." }
-            return try await agent.run(rest)
-
-        case "/see", "/vision":
-            conv.currentAgent = .vision
-            guard !rest.isEmpty, let agent = conv.agents[.vision] else { return "Switched to vision." }
-            return try await agent.run(rest)
-
-        case "/chat":
-            conv.currentAgent = .general
-            guard !rest.isEmpty, let agent = conv.agents[.general] else { return "Switched to general." }
-            return try await agent.run(rest)
-
-        case "/plan":
-            guard !rest.isEmpty else { return "Usage: /plan <task description>" }
-            let agent = conv.agents[conv.currentAgent] ?? conv.agents[.general]!
-            return try await agent.run(rest, plan: true)
-
-        case "/remember":
-            guard !rest.isEmpty else { return "Usage: /remember <text>" }
-            let id = memoryStore.save(category: "note", content: rest)
-            return "Remembered (id=\(id)): \(rest)"
-
-        case "/memories":
-            let memories = memoryStore.recall(category: rest.isEmpty ? nil : rest)
-            if memories.isEmpty { return "No memories found." }
-            return memories.map { "[id=\($0.id ?? 0)] [\($0.category)] \($0.content)" }.joined(separator: "\n")
-
-        case "/knowledge", "/rag":
-            conv.currentAgent = .rag
-            guard !rest.isEmpty, let agent = conv.agents[.rag] else { return "Switched to knowledge agent." }
-            return try await agent.run(rest)
-
-        case "/ingest":
-            guard !rest.isEmpty else { return "Usage: /ingest <file or directory path>" }
-            let path = rest.trimmingCharacters(in: .whitespaces)
-            let ingester = DocumentIngester(
-                client: activeClient,
-                embeddingModel: modelConfig.embedding,
-                chunkStore: chunkStore
-            )
-
-            var isDir: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir) else {
-                return "Path not found: \(path)"
-            }
-
-            if isDir.boolValue {
-                let result = try await ingester.ingestDirectory(at: path)
-                return "Ingested \(result.files) files (\(result.chunks) chunks) into knowledge base."
-            } else {
-                let chunks = try await ingester.ingestFile(at: path)
-                return "Ingested \(URL(fileURLWithPath: path).lastPathComponent): \(chunks) chunks."
-            }
-
-        case "/backend":
-            return "Backend: Ollama (llama.cpp Metal). All inference runs through Ollama for maximum performance."
-
-        case "/parallel":
-            parallelAgentsEnabled.toggle()
-            return "Parallel agent execution: \(parallelAgentsEnabled ? "enabled" : "disabled")"
-
-        case "/moa":
-            mixtureOfAgentsEnabled.toggle()
-            return "Mixture of Agents: \(mixtureOfAgentsEnabled ? "enabled" : "disabled")"
-
-        case "/workflows":
-            let tools = compositeToolStore.listAll()
-            if tools.isEmpty { return "No learned workflows. Use /learn to create one." }
-            return tools.map { t in
-                "• \(t.name) — \(t.description) (\(t.decodedSteps.count) steps, used \(t.timesUsed)x)"
-            }.joined(separator: "\n")
-
-        case "/learn":
-            guard !rest.isEmpty else {
-                return """
-                Usage: /learn <name> | <description> | <trigger phrase>
-                Then describe the steps in your next message.
-                Example: /learn deploy_app | Deploy the app to production | deploy the app
-                """
-            }
-            let parts = rest.components(separatedBy: " | ")
-            guard parts.count >= 3 else {
-                return "Format: /learn <name> | <description> | <trigger phrase>"
-            }
-            let name = parts[0].trimmingCharacters(in: .whitespaces)
-            let desc = parts[1].trimmingCharacters(in: .whitespaces)
-            let trigger = parts[2].trimmingCharacters(in: .whitespaces)
-
-            // For now, create an empty workflow that the agent can populate via tool calls
-            let id = compositeToolStore.save(name: name, description: desc, steps: [], triggerPhrase: trigger)
-            return "Created workflow '\(name)' (id=\(id)). Trigger: \"\(trigger)\"\nTeach me the steps by describing what to do, and I'll record the tool calls."
-
-        case "/help":
-            return """
-            Commands:
-              /code <msg> — force coding agent
-              /think <msg> — force reasoning agent
-              /see <msg> — force vision agent
-              /chat <msg> — force general agent
-              /knowledge <msg> — force knowledge/RAG agent
-              /plan <task> — force planning mode
-              /ingest <path> — ingest file/directory into knowledge base
-              /remember <text> — save to memory
-              /memories [category] — list memories
-              /learn <name> | <desc> | <trigger> — create a reusable workflow
-              /workflows — list learned workflows
-              /backend — show inference backend info
-              /parallel — toggle parallel agent execution
-              /moa — toggle Mixture of Agents
-              /clear — reset conversation
-              /status — system info
-            """
-
-        default:
-            return "Unknown command: \(cmd). Type /help for commands."
-        }
+        try await CommandHandler.handle(command: message, conv: conv, orchestrator: self)
     }
 
     // MARK: - Default Soul

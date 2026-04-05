@@ -40,6 +40,36 @@ struct ConversationSummary: Codable, FetchableRecord, PersistableRecord, Identif
     static let databaseTableName = "conversations"
 }
 
+/// Serial queue actor that processes embedding requests one at a time,
+/// preventing unbounded concurrent Ollama calls when many memories are saved rapidly.
+private actor EmbeddingQueue {
+    private var pending: [(id: Int64, content: String)] = []
+    private var isProcessing = false
+
+    /// The actual work closure, set once by MemoryStore.
+    private let handler: @Sendable (Int64, String) async -> Void
+
+    init(handler: @escaping @Sendable (Int64, String) async -> Void) {
+        self.handler = handler
+    }
+
+    func enqueue(id: Int64, content: String) {
+        pending.append((id: id, content: content))
+        if !isProcessing {
+            isProcessing = true
+            Task { await processPending() }
+        }
+    }
+
+    private func processPending() async {
+        while !pending.isEmpty {
+            let item = pending.removeFirst()
+            await handler(item.id, item.content)
+        }
+        isProcessing = false
+    }
+}
+
 /// Persistent memory store with semantic vector search.
 ///
 /// Memories are stored in SQLite with GRDB, and their embeddings are
@@ -48,6 +78,7 @@ struct ConversationSummary: Codable, FetchableRecord, PersistableRecord, Identif
 final class MemoryStore {
     private let db: DatabasePool
     private let vectorIndex = VectorIndex()
+    private var embeddingQueue: EmbeddingQueue?
 
     /// Optional inference client for generating embeddings.
     /// Set after initialization to enable semantic search.
@@ -57,6 +88,10 @@ final class MemoryStore {
     init(db: DatabasePool = DatabaseManager.shared.dbPool) {
         self.db = db
         loadVectorIndex()
+        // Initialize after self is fully formed to avoid capture-before-init
+        self.embeddingQueue = EmbeddingQueue { [weak self] id, content in
+            await self?.generateAndStoreEmbedding(id: id, content: content)
+        }
     }
 
     /// Load all memory embeddings into the in-memory vector index.
@@ -87,15 +122,21 @@ final class MemoryStore {
             category: category, content: content, metadata: metadata,
             embedding: nil, createdAt: now, updatedAt: now
         )
-        try! db.write { db in
-            try memory.insert(db)
+        do {
+            try db.write { db in
+                try memory.insert(db)
+            }
+        } catch {
+            Log.app.error("[memory] save failed: \(error)")
+            return 0
         }
 
-        let id = memory.id!
+        guard let id = memory.id else { return 0 }
 
-        // Generate embedding asynchronously
+        // Enqueue embedding generation; the actor processes them serially
+        // to avoid unbounded concurrent Ollama requests.
         Task {
-            await generateAndStoreEmbedding(id: id, content: content)
+            await embeddingQueue?.enqueue(id: id, content: content)
         }
 
         return id
@@ -126,12 +167,17 @@ final class MemoryStore {
     // MARK: - Recall
 
     func recall(category: String? = nil, limit: Int = 20) -> [Memory] {
-        try! db.read { db in
-            var query = Memory.order(Column("updatedAt").desc).limit(limit)
-            if let category {
-                query = query.filter(Column("category") == category)
+        do {
+            return try db.read { db in
+                var query = Memory.order(Column("updatedAt").desc).limit(limit)
+                if let category {
+                    query = query.filter(Column("category") == category)
+                }
+                return try query.fetchAll(db)
             }
-            return try query.fetchAll(db)
+        } catch {
+            Log.app.error("[memory] recall failed: \(error)")
+            return []
         }
     }
 
@@ -190,12 +236,17 @@ final class MemoryStore {
 
     /// Keyword-based search (original behavior, used as fallback).
     func keywordSearch(query: String, limit: Int = 10) -> [Memory] {
-        try! db.read { db in
-            try Memory
-                .filter(Column("content").like("%\(query)%"))
-                .order(Column("updatedAt").desc)
-                .limit(limit)
-                .fetchAll(db)
+        do {
+            return try db.read { db in
+                try Memory
+                    .filter(Column("content").like("%\(query)%"))
+                    .order(Column("updatedAt").desc)
+                    .limit(limit)
+                    .fetchAll(db)
+            }
+        } catch {
+            Log.app.error("[memory] keywordSearch failed: \(error)")
+            return []
         }
     }
 
@@ -203,8 +254,13 @@ final class MemoryStore {
 
     func forget(memoryId: Int64) -> Bool {
         vectorIndex.remove(id: memoryId)
-        return try! db.write { db in
-            try Memory.deleteOne(db, id: memoryId)
+        do {
+            return try db.write { db in
+                try Memory.deleteOne(db, id: memoryId)
+            }
+        } catch {
+            Log.app.error("[memory] forget failed: \(error)")
+            return false
         }
     }
 
@@ -215,18 +271,27 @@ final class MemoryStore {
             userId: userId, summary: summary,
             messageCount: messageCount, createdAt: Date()
         )
-        try! db.write { db in
-            try record.insert(db)
+        do {
+            try db.write { db in
+                try record.insert(db)
+            }
+        } catch {
+            Log.app.error("[memory] saveConversationSummary failed: \(error)")
         }
     }
 
     func getRecentConversations(userId: String, limit: Int = 3) -> [ConversationSummary] {
-        try! db.read { db in
-            try ConversationSummary
-                .filter(Column("userId") == userId)
-                .order(Column("createdAt").desc)
-                .limit(limit)
-                .fetchAll(db)
+        do {
+            return try db.read { db in
+                try ConversationSummary
+                    .filter(Column("userId") == userId)
+                    .order(Column("createdAt").desc)
+                    .limit(limit)
+                    .fetchAll(db)
+            }
+        } catch {
+            Log.app.error("[memory] getRecentConversations failed: \(error)")
+            return []
         }
     }
 

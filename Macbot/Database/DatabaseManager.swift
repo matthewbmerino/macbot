@@ -7,16 +7,34 @@ final class DatabaseManager {
     let dbPool: DatabasePool
 
     private init() {
-        let appSupport = FileManager.default.urls(
+        guard let appSupportBase = FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask
-        ).first!.appendingPathComponent("Macbot", isDirectory: true)
+        ).first else {
+            fatalError("[database] could not locate Application Support directory")
+        }
+        let appSupport = appSupportBase.appendingPathComponent("Macbot", isDirectory: true)
 
-        try! FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
+        do {
+            try FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
+        } catch {
+            Log.app.error("[database] failed to create app support directory: \(error)")
+            fatalError("[database] failed to create app support directory: \(error)")
+        }
 
         let dbPath = appSupport.appendingPathComponent("macbot.db").path
-        dbPool = try! DatabasePool(path: dbPath)
+        do {
+            dbPool = try DatabasePool(path: dbPath)
+        } catch {
+            Log.app.error("[database] failed to open database at \(dbPath): \(error)")
+            fatalError("[database] failed to open database: \(error)")
+        }
 
-        try! migrator.migrate(dbPool)
+        do {
+            try migrator.migrate(dbPool)
+        } catch {
+            Log.app.error("[database] migration failed: \(error)")
+            fatalError("[database] migration failed: \(error)")
+        }
         Log.app.info("Database ready at \(dbPath)")
     }
 

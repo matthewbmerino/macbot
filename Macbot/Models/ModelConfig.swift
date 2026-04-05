@@ -48,22 +48,6 @@ struct ModelConfig: Codable {
         return disabled
     }
 
-    /// MLX model equivalents for the configured models.
-    var mlxModels: [String: MLXModelSpec] {
-        var map: [String: MLXModelSpec] = [:]
-        for model in allModels {
-            if let spec = MLXClient.modelCatalog[model] {
-                map[model] = spec
-            }
-        }
-        return map
-    }
-
-    /// Estimate total VRAM needed for all configured models.
-    var estimatedTotalRAM: Double {
-        allModels.compactMap { MLXClient.estimateMemory(for: $0) }.reduce(0, +)
-    }
-
     // MARK: - Persistence
 
     private static let key = "com.macbot.modelConfig"

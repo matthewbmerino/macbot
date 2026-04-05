@@ -8,6 +8,9 @@ final class EmbeddingRouter: @unchecked Sendable {
     private let client: any InferenceProvider
     private let embeddingModel: String
 
+    /// Lock protecting mutable state (`centroids`, `centroidNorms`, `isCalibrated`).
+    private let lock = NSLock()
+
     /// Pre-computed centroids for each agent category.
     /// Each centroid is the average embedding of representative queries.
     private var centroids: [AgentCategory: [Float]] = [:]
@@ -96,8 +99,10 @@ final class EmbeddingRouter: @unchecked Sendable {
                 let centroid = Self.averageEmbedding(embeddings)
                 let norm = VectorIndex.l2Norm(centroid)
 
+                lock.lock()
                 centroids[category] = centroid
                 centroidNorms[category] = norm
+                lock.unlock()
 
                 Log.agents.info("[embedding-router] calibrated \(category.rawValue) with \(embeddings.count) embeddings (dim=\(centroid.count))")
             } catch {
@@ -105,8 +110,10 @@ final class EmbeddingRouter: @unchecked Sendable {
             }
         }
 
+        lock.lock()
         isCalibrated = !centroids.isEmpty
         let count = centroids.count
+        lock.unlock()
         Log.agents.info("[embedding-router] calibration complete: \(count) categories")
     }
 
@@ -114,7 +121,12 @@ final class EmbeddingRouter: @unchecked Sendable {
     /// Returns the category with highest cosine similarity to the message embedding.
     func classify(message: String, hasImages: Bool = false) async -> AgentCategory {
         if hasImages { return .vision }
-        guard isCalibrated else {
+
+        lock.lock()
+        let calibrated = isCalibrated
+        lock.unlock()
+
+        guard calibrated else {
             Log.agents.warning("[embedding-router] not calibrated, defaulting to general")
             return .general
         }
@@ -128,11 +140,16 @@ final class EmbeddingRouter: @unchecked Sendable {
             let queryNorm = VectorIndex.l2Norm(queryEmb)
             guard queryNorm > 0 else { return .general }
 
+            lock.lock()
+            let snapshotCentroids = centroids
+            let snapshotNorms = centroidNorms
+            lock.unlock()
+
             var bestCategory: AgentCategory = .general
             var bestSimilarity: Float = -1
 
-            for (category, centroid) in centroids {
-                guard let norm = centroidNorms[category] else { continue }
+            for (category, centroid) in snapshotCentroids {
+                guard let norm = snapshotNorms[category] else { continue }
                 let sim = VectorIndex.cosineSimilarity(queryEmb, queryNorm, centroid, norm)
                 if sim > bestSimilarity {
                     bestSimilarity = sim
@@ -156,7 +173,11 @@ final class EmbeddingRouter: @unchecked Sendable {
 
     /// Get similarity scores for all categories (for debugging/UI).
     func classifyWithScores(message: String) async -> [(AgentCategory, Float)] {
-        guard isCalibrated else { return [] }
+        lock.lock()
+        let calibrated = isCalibrated
+        lock.unlock()
+
+        guard calibrated else { return [] }
 
         do {
             let embeddings = try await client.embed(model: embeddingModel, text: [message])
@@ -165,9 +186,14 @@ final class EmbeddingRouter: @unchecked Sendable {
             let queryNorm = VectorIndex.l2Norm(queryEmb)
             guard queryNorm > 0 else { return [] }
 
+            lock.lock()
+            let snapshotCentroids = centroids
+            let snapshotNorms = centroidNorms
+            lock.unlock()
+
             var scores: [(AgentCategory, Float)] = []
-            for (category, centroid) in centroids {
-                guard let norm = centroidNorms[category] else { continue }
+            for (category, centroid) in snapshotCentroids {
+                guard let norm = snapshotNorms[category] else { continue }
                 let sim = VectorIndex.cosineSimilarity(queryEmb, queryNorm, centroid, norm)
                 scores.append((category, sim))
             }

@@ -80,24 +80,28 @@ final class ChunkStore {
         let now = Date()
         var ids: [Int64] = []
 
-        try! db.write { db in
-            for (index, chunk) in chunks.enumerated() {
-                var record = DocumentChunk(
-                    sourceFile: sourceFile,
-                    chunkIndex: index,
-                    content: chunk.content,
-                    embedding: DocumentChunk.serializeEmbedding(chunk.embedding),
-                    tokenCount: TokenEstimator.estimate(chunk.content),
-                    metadata: chunk.metadata,
-                    createdAt: now,
-                    updatedAt: now
-                )
-                try record.insert(db)
-                if let id = record.id {
-                    ids.append(id)
-                    vectorIndex.insert(id: id, embedding: chunk.embedding)
+        do {
+            try db.write { db in
+                for (index, chunk) in chunks.enumerated() {
+                    var record = DocumentChunk(
+                        sourceFile: sourceFile,
+                        chunkIndex: index,
+                        content: chunk.content,
+                        embedding: DocumentChunk.serializeEmbedding(chunk.embedding),
+                        tokenCount: TokenEstimator.estimate(chunk.content),
+                        metadata: chunk.metadata,
+                        createdAt: now,
+                        updatedAt: now
+                    )
+                    try record.insert(db)
+                    if let id = record.id {
+                        ids.append(id)
+                        vectorIndex.insert(id: id, embedding: chunk.embedding)
+                    }
                 }
             }
+        } catch {
+            Log.app.error("[chunk-store] insertChunks failed: \(error)")
         }
 
         return ids
@@ -114,10 +118,14 @@ final class ChunkStore {
             ingestedAt: now,
             modifiedAt: now
         )
-        try! db.write { db in
-            // Delete existing record for this path
-            try IngestedFile.filter(Column("filePath") == filePath).deleteAll(db)
-            try record.insert(db)
+        do {
+            try db.write { db in
+                // Delete existing record for this path
+                try IngestedFile.filter(Column("filePath") == filePath).deleteAll(db)
+                try record.insert(db)
+            }
+        } catch {
+            Log.app.error("[chunk-store] recordIngestion failed: \(error)")
         }
     }
 
@@ -198,9 +206,13 @@ final class ChunkStore {
             if let id = chunk.id { vectorIndex.remove(id: id) }
         }
 
-        try! db.write { db in
-            try DocumentChunk.filter(Column("sourceFile") == filePath).deleteAll(db)
-            try IngestedFile.filter(Column("filePath") == filePath).deleteAll(db)
+        do {
+            try db.write { db in
+                try DocumentChunk.filter(Column("sourceFile") == filePath).deleteAll(db)
+                try IngestedFile.filter(Column("filePath") == filePath).deleteAll(db)
+            }
+        } catch {
+            Log.app.error("[chunk-store] removeFile failed: \(error)")
         }
     }
 

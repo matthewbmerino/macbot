@@ -33,7 +33,9 @@ final class OllamaClient: InferenceProvider, @unchecked Sendable {
         if let tools { payload["tools"] = tools }
 
         let data = try await post("/api/chat", payload: payload, timeout: timeout)
-        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw OllamaError.httpError(0)
+        }
         let message = json["message"] as? [String: Any] ?? [:]
 
         // Some models put output in "thinking" key when think mode leaks through
@@ -99,16 +101,22 @@ final class OllamaClient: InferenceProvider, @unchecked Sendable {
     func embed(model: String, text: [String]) async throws -> [[Float]] {
         let payload: [String: Any] = ["model": model, "input": text]
         let data = try await post("/api/embed", payload: payload)
-        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw OllamaError.httpError(0)
+        }
         return json["embeddings"] as? [[Float]] ?? []
     }
 
     // MARK: - List Models
 
     func listModels() async throws -> [ModelInfo] {
-        let url = URL(string: "\(host)/api/tags")!
+        guard let url = URL(string: "\(host)/api/tags") else {
+            throw OllamaError.invalidURL
+        }
         let (data, _) = try await session.data(from: url)
-        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw OllamaError.httpError(0)
+        }
         let models = json["models"] as? [[String: Any]] ?? []
         return models.map {
             ModelInfo(name: $0["name"] as? String ?? "", size: $0["size"] as? Int64)

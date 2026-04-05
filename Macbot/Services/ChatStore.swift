@@ -41,50 +41,72 @@ final class ChatStore {
             createdAt: now,
             updatedAt: now
         )
-        try! db.write { db in
-            try chat.insert(db)
+        do {
+            try db.write { db in
+                try chat.insert(db)
+            }
+        } catch {
+            Log.app.error("[chat] createChat failed: \(error)")
         }
         return chat
     }
 
     func listChats() -> [ChatRecord] {
-        try! db.read { db in
-            try ChatRecord.order(Column("updatedAt").desc).fetchAll(db)
+        do {
+            return try db.read { db in
+                try ChatRecord.order(Column("updatedAt").desc).fetchAll(db)
+            }
+        } catch {
+            Log.app.error("[chat] listChats failed: \(error)")
+            return []
         }
     }
 
     func searchChats(query: String) -> [ChatRecord] {
-        try! db.read { db in
-            // Search in chat titles and message content
-            let chatIds = try String.fetchAll(db, sql: """
-                SELECT DISTINCT chatId FROM chat_messages
-                WHERE content LIKE ?
-                UNION
-                SELECT id FROM chats WHERE title LIKE ?
-            """, arguments: ["%\(query)%", "%\(query)%"])
+        do {
+            return try db.read { db in
+                // Search in chat titles and message content
+                let chatIds = try String.fetchAll(db, sql: """
+                    SELECT DISTINCT chatId FROM chat_messages
+                    WHERE content LIKE ?
+                    UNION
+                    SELECT id FROM chats WHERE title LIKE ?
+                """, arguments: ["%\(query)%", "%\(query)%"])
 
-            return try ChatRecord
-                .filter(chatIds.contains(Column("id")))
-                .order(Column("updatedAt").desc)
-                .fetchAll(db)
+                return try ChatRecord
+                    .filter(chatIds.contains(Column("id")))
+                    .order(Column("updatedAt").desc)
+                    .fetchAll(db)
+            }
+        } catch {
+            Log.app.error("[chat] searchChats failed: \(error)")
+            return []
         }
     }
 
     func updateChat(id: String, title: String? = nil, lastMessage: String? = nil, agentCategory: String? = nil) {
-        try! db.write { db in
-            if var chat = try ChatRecord.fetchOne(db, id: id) {
-                if let title { chat.title = title }
-                if let lastMessage { chat.lastMessage = lastMessage }
-                if let agentCategory { chat.agentCategory = agentCategory }
-                chat.updatedAt = Date()
-                try chat.update(db)
+        do {
+            try db.write { db in
+                if var chat = try ChatRecord.fetchOne(db, id: id) {
+                    if let title { chat.title = title }
+                    if let lastMessage { chat.lastMessage = lastMessage }
+                    if let agentCategory { chat.agentCategory = agentCategory }
+                    chat.updatedAt = Date()
+                    try chat.update(db)
+                }
             }
+        } catch {
+            Log.app.error("[chat] updateChat failed: \(error)")
         }
     }
 
     func deleteChat(id: String) {
-        try! db.write { db in
-            _ = try ChatRecord.deleteOne(db, id: id)
+        do {
+            try db.write { db in
+                _ = try ChatRecord.deleteOne(db, id: id)
+            }
+        } catch {
+            Log.app.error("[chat] deleteChat failed: \(error)")
         }
     }
 
@@ -98,8 +120,12 @@ final class ChatStore {
             agentCategory: agentCategory,
             createdAt: Date()
         )
-        try! db.write { db in
-            try msg.insert(db)
+        do {
+            try db.write { db in
+                try msg.insert(db)
+            }
+        } catch {
+            Log.app.error("[chat] saveMessage failed: \(error)")
         }
 
         // Update chat's last message and timestamp
@@ -108,31 +134,41 @@ final class ChatStore {
     }
 
     func loadMessages(chatId: String) -> [ChatMessageRecord] {
-        try! db.read { db in
-            try ChatMessageRecord
-                .filter(Column("chatId") == chatId)
-                .order(Column("createdAt").asc)
-                .fetchAll(db)
+        do {
+            return try db.read { db in
+                try ChatMessageRecord
+                    .filter(Column("chatId") == chatId)
+                    .order(Column("createdAt").asc)
+                    .fetchAll(db)
+            }
+        } catch {
+            Log.app.error("[chat] loadMessages failed: \(error)")
+            return []
         }
     }
 
     /// Search messages across all chats.
     func searchMessages(query: String) -> [(message: ChatMessageRecord, chatTitle: String)] {
-        try! db.read { db in
-            let rows = try Row.fetchAll(db, sql: """
-                SELECT m.*, c.title AS chatTitle
-                FROM chat_messages m
-                JOIN chats c ON c.id = m.chatId
-                WHERE m.content LIKE ?
-                ORDER BY m.createdAt DESC
-                LIMIT 50
-            """, arguments: ["%\(query)%"])
+        do {
+            return try db.read { db in
+                let rows = try Row.fetchAll(db, sql: """
+                    SELECT m.*, c.title AS chatTitle
+                    FROM chat_messages m
+                    JOIN chats c ON c.id = m.chatId
+                    WHERE m.content LIKE ?
+                    ORDER BY m.createdAt DESC
+                    LIMIT 50
+                """, arguments: ["%\(query)%"])
 
-            return try rows.map { row in
-                let msg = try ChatMessageRecord(row: row)
-                let title: String = row["chatTitle"]
-                return (msg, title)
+                return try rows.map { row in
+                    let msg = try ChatMessageRecord(row: row)
+                    let title: String = row["chatTitle"]
+                    return (msg, title)
+                }
             }
+        } catch {
+            Log.app.error("[chat] searchMessages failed: \(error)")
+            return []
         }
     }
 
