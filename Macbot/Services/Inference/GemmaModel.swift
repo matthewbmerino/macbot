@@ -382,7 +382,7 @@ class GemmaModel: Module {
         let seqLen = tokenIds.dim(1)
         let mask: MLXArray?
         if seqLen > 1 {
-            mask = MultiHeadAttention.createAdditiveCausalMask(seqLen)
+            mask = MultiHeadAttention.createAdditiveCausalMask(seqLen, dtype: .float16)
         } else {
             mask = nil
         }
