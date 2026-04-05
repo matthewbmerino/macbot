@@ -51,9 +51,38 @@ enum MacOSTools {
         name: "get_listening_ports", description: "List all processes listening on network ports. Useful for finding what servers/services are running (web servers, databases, dev servers, etc.).",
         properties: [:]
     )
+    static let quitAppSpec = ToolSpec(
+        name: "quit_app", description: "Quit/close a running macOS application by name.",
+        properties: ["name": .init(type: "string", description: "App name to quit")],
+        required: ["name"]
+    )
+    static let runAppleScriptSpec = ToolSpec(
+        name: "run_applescript", description: "Execute arbitrary AppleScript code. Use this for any macOS automation: controlling apps, clicking UI elements, managing windows, typing text, adjusting system settings, or anything else AppleScript can do.",
+        properties: ["script": .init(type: "string", description: "AppleScript code to execute")],
+        required: ["script"]
+    )
+    static let runShellSpec = ToolSpec(
+        name: "run_command", description: "Run a shell command and return the output. Use for any system operation: file management, git, brew, network tools, etc.",
+        properties: ["command": .init(type: "string", description: "Shell command to run")],
+        required: ["command"]
+    )
+    static let setVolumeSpec = ToolSpec(
+        name: "set_volume", description: "Set the system audio volume (0-100).",
+        properties: ["level": .init(type: "string", description: "Volume level 0-100")],
+        required: ["level"]
+    )
+    static let toggleDarkModeSpec = ToolSpec(
+        name: "toggle_dark_mode", description: "Toggle macOS dark mode on or off.",
+        properties: [:]
+    )
+    static let focusAppSpec = ToolSpec(
+        name: "focus_app", description: "Bring a running application to the front/focus.",
+        properties: ["name": .init(type: "string", description: "App name to focus")],
+        required: ["name"]
+    )
 
     static func register(on registry: ToolRegistry) async {
-        await registry.register(openAppSpec) { args in openApp(args["name"] as? String ?? "") }
+        await registry.register(openAppSpec) { args in await openApp(args["name"] as? String ?? "") }
         await registry.register(openURLSpec) { args in openURL(args["url"] as? String ?? "") }
         await registry.register(notifySpec) { args in
             sendNotification(title: args["title"] as? String ?? "", message: args["message"] as? String ?? "")
@@ -70,11 +99,95 @@ enum MacOSTools {
             await getTopProcesses(sortBy: args["sort_by"] as? String ?? "cpu")
         }
         await registry.register(portSpec) { _ in await getListeningPorts() }
+        await registry.register(quitAppSpec) { args in quitApp(args["name"] as? String ?? "") }
+        await registry.register(runAppleScriptSpec) { args in
+            executeAppleScript(args["script"] as? String ?? "")
+        }
+        await registry.register(runShellSpec) { args in
+            await executeShellCommand(args["command"] as? String ?? "")
+        }
+        await registry.register(setVolumeSpec) { args in
+            setVolume(level: args["level"] as? String ?? "50")
+        }
+        await registry.register(toggleDarkModeSpec) { _ in toggleDarkMode() }
+        await registry.register(focusAppSpec) { args in focusApp(args["name"] as? String ?? "") }
     }
 
-    static func openApp(_ name: String) -> String {
-        let result = runAppleScript("tell application \"\(name)\" to activate")
-        return result ?? "Opened \(name)"
+    static func openApp(_ name: String) async -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+
+        // Try NSWorkspace first (most reliable)
+        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId(for: trimmed)) {
+            let config = NSWorkspace.OpenConfiguration()
+            do {
+                try await NSWorkspace.shared.openApplication(at: url, configuration: config)
+                return "Opened \(trimmed)"
+            } catch {
+                // Fall through to other methods
+            }
+        }
+
+        // Try by path in /Applications
+        let paths = [
+            "/Applications/\(trimmed).app",
+            "/Applications/Utilities/\(trimmed).app",
+            "/System/Applications/\(trimmed).app",
+            "/System/Applications/Utilities/\(trimmed).app",
+        ]
+        for path in paths {
+            let url = URL(fileURLWithPath: path)
+            if FileManager.default.fileExists(atPath: path) {
+                do {
+                    try await NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
+                    return "Opened \(trimmed)"
+                } catch { continue }
+            }
+        }
+
+        // Try open command (catches everything else)
+        if let result = runShell("open -a '\(trimmed)' 2>&1") {
+            if !result.contains("Unable to find") {
+                return "Opened \(trimmed)"
+            }
+        }
+
+        // Last resort: AppleScript
+        _ = runAppleScript("tell application \"\(trimmed)\" to activate")
+        return "Opened \(trimmed)"
+    }
+
+    /// Map common app names to bundle identifiers.
+    private static func bundleId(for name: String) -> String {
+        let lower = name.lowercased()
+        let bundleMap: [String: String] = [
+            "safari": "com.apple.Safari",
+            "terminal": "com.apple.Terminal",
+            "finder": "com.apple.finder",
+            "mail": "com.apple.mail",
+            "messages": "com.apple.MobileSMS",
+            "notes": "com.apple.Notes",
+            "calendar": "com.apple.iCal",
+            "music": "com.apple.Music",
+            "photos": "com.apple.Photos",
+            "maps": "com.apple.Maps",
+            "preview": "com.apple.Preview",
+            "textedit": "com.apple.TextEdit",
+            "calculator": "com.apple.calculator",
+            "activity monitor": "com.apple.ActivityMonitor",
+            "system settings": "com.apple.systempreferences",
+            "system preferences": "com.apple.systempreferences",
+            "xcode": "com.apple.dt.Xcode",
+            "vscode": "com.microsoft.VSCode",
+            "visual studio code": "com.microsoft.VSCode",
+            "chrome": "com.google.Chrome",
+            "firefox": "org.mozilla.firefox",
+            "slack": "com.tinyspeck.slackmacgap",
+            "discord": "com.hnc.Discord",
+            "spotify": "com.spotify.client",
+            "iterm": "com.googlecode.iterm2",
+            "iterm2": "com.googlecode.iterm2",
+        ]
+        return bundleMap[lower] ?? "com.apple.\(name)"
     }
 
     static func openURL(_ urlString: String) -> String {
@@ -401,6 +514,91 @@ enum MacOSTools {
         }
 
         return "Error: screenshot failed — grant Screen Recording permission in System Settings > Privacy & Security > Screen Recording"
+    }
+
+    // MARK: - Helpers
+
+    // MARK: - App Control
+
+    static func quitApp(_ name: String) -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        let result = runAppleScript("tell application \"\(trimmed)\" to quit")
+        if let err = result, err.contains("error") {
+            _ = runShell("pkill -i '\(trimmed)' 2>/dev/null")
+        }
+        return "Quit \(trimmed)"
+    }
+
+    static func focusApp(_ name: String) -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        _ = runAppleScript("tell application \"\(trimmed)\" to activate")
+        return "Focused \(trimmed)"
+    }
+
+    // MARK: - System Control
+
+    static func setVolume(level: String) -> String {
+        let vol = Int(level) ?? 50
+        let clamped = max(0, min(100, vol))
+        _ = runAppleScript("set volume output volume \(clamped)")
+        return "Volume set to \(clamped)%"
+    }
+
+    static func toggleDarkMode() -> String {
+        let result = runAppleScript("""
+        tell application "System Events"
+            tell appearance preferences
+                set dark mode to not dark mode
+                return dark mode as string
+            end tell
+        end tell
+        """)
+        let mode = result == "true" ? "dark" : "light"
+        return "Switched to \(mode) mode"
+    }
+
+    // MARK: - General Execution
+
+    static func executeAppleScript(_ script: String) -> String {
+        let result = runAppleScript(script)
+        return result ?? "(no output)"
+    }
+
+    static func executeShellCommand(_ command: String) async -> String {
+        let trimmed = command.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return "Error: empty command" }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-c", trimmed]
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        process.standardOutput = outPipe
+        process.standardError = errPipe
+
+        do {
+            try process.run()
+
+            let deadline = Date().addingTimeInterval(30)
+            while process.isRunning && Date() < deadline {
+                try await Task.sleep(for: .milliseconds(100))
+            }
+            if process.isRunning {
+                process.terminate()
+                return "Error: command timed out after 30s"
+            }
+
+            let output = String(data: outPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            let error = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+
+            var result = ""
+            if !output.isEmpty { result += output }
+            if !error.isEmpty { result += (result.isEmpty ? "" : "\n") + "STDERR: \(error)" }
+            if result.count > 5000 { result = String(result.prefix(5000)) + "\n... (truncated)" }
+            return result.isEmpty ? "(no output)" : result
+        } catch {
+            return "Error: \(error.localizedDescription)"
+        }
     }
 
     // MARK: - Helpers
