@@ -1,9 +1,9 @@
-// swift-tools-version: 5.10
+// swift-tools-version: 6.0
 import PackageDescription
 
 let package = Package(
     name: "Macbot",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS(.v15)],
     dependencies: [
         .package(url: "https://github.com/groue/GRDB.swift", from: "7.0.0"),
         .package(url: "https://github.com/kishikawakatsumi/KeychainAccess", from: "4.2.2"),
@@ -51,5 +51,10 @@ let package = Package(
             ],
             path: "Tests/MacbotTests"
         ),
-    ]
+    ],
+    // Tools 6.0 is required for the .v15 platform, but we stay on the Swift 5
+    // language mode so the existing NSLock-in-async code in EmbeddingRouter
+    // and friends doesn't trip Swift 6 strict concurrency errors. Migrating
+    // to actors / scoped locks is tracked in TODO.md.
+    swiftLanguageModes: [.v5]
 )
