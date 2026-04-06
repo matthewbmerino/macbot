@@ -27,7 +27,13 @@ class BaseAgent {
 
     // ReAct reflection — evaluate tool results before responding
     var reflectionEnabled: Bool = true
-    private let reflectionThreshold = 5  // Reflect after this many tool calls
+    private let reflectionThreshold = 3  // Reflect after this many tool calls
+
+    /// Maximum tool-using iterations before forcing a synthesis. The 10th
+    /// iteration always runs without tools so the model is forced to write a
+    /// real answer from whatever it has gathered, instead of returning a
+    /// dead-end "max iterations" string and discarding the work.
+    private let maxIterations = 10
 
     // Human-readable tool labels for status updates
     static let toolLabels: [String: String] = [
@@ -357,7 +363,7 @@ class BaseAgent {
         var tools = await toolRegistry.filteredSpecsAsJSON(for: input, recentTools: recentTools)
         var toolCallCount = 0
 
-        for _ in 0..<10 {
+        for iteration in 0..<maxIterations {
             if tokenCount > Int(Double(numCtx) * 0.75) {
                 await trimHistory()
             }
@@ -367,16 +373,35 @@ class BaseAgent {
                 tools = await toolRegistry.filteredSpecsAsJSON(for: input, recentTools: recentTools)
             }
 
+            // On the final iteration, force a synthesis: no tools allowed,
+            // strong nudge to answer from gathered data. This is the
+            // anti-rabbit-hole guard. Without it the agent could spend all
+            // 10 iterations calling tools and then return "Max tool
+            // iterations reached" — throwing away the work.
+            let isFinalIteration = iteration == maxIterations - 1
+            if isFinalIteration {
+                appendToHistory([
+                    "role": "system",
+                    "content": "Stop calling tools. Use ONLY the tool results already in this conversation to answer the user's original question now. If the results contain the answer, quote them verbatim. If they don't, say exactly what's missing — do not guess.",
+                ])
+            }
+
             let resp = try await client.chat(
                 model: model,
                 messages: history,
-                tools: tools.isEmpty ? nil : tools,
+                tools: isFinalIteration ? nil : (tools.isEmpty ? nil : tools),
                 temperature: adaptiveTemperature(toolCallCount: toolCallCount),
                 numCtx: numCtx,
                 timeout: 120
             )
 
             appendToHistory(["role": "assistant", "content": resp.content])
+
+            // Final-iteration response is always returned as-is, even if the
+            // model tried to call more tools (we ignore those calls).
+            if isFinalIteration {
+                return ThinkingStripper.strip(resp.content)
+            }
 
             guard let toolCalls = resp.toolCalls, !toolCalls.isEmpty else {
                 let response = ThinkingStripper.strip(resp.content)
@@ -434,6 +459,8 @@ class BaseAgent {
             }
         }
 
+        // Unreachable: the loop always returns on the final iteration above.
+        // Kept as a defensive fallback so the function still type-checks.
         return "Max tool iterations reached."
     }
 
@@ -503,7 +530,7 @@ class BaseAgent {
                     var stepCount = 0
                     var totalToolCalls = 0
 
-                    for _ in 0..<10 {
+                    for iteration in 0..<maxIterations {
                         if tokenCount > Int(Double(numCtx) * 0.75) {
                             await trimHistory()
                         }
@@ -512,16 +539,39 @@ class BaseAgent {
                             tools = await toolRegistry.filteredSpecsAsJSON(for: input, recentTools: recentTools)
                         }
 
+                        // See note on the non-streaming path: final iteration
+                        // forces a synthesis with no tools so we never bail
+                        // out with the dead-end "Max tool iterations" string.
+                        let isFinalIteration = iteration == maxIterations - 1
+                        if isFinalIteration {
+                            continuation.yield(.status("Synthesizing answer from gathered data..."))
+                            appendToHistory([
+                                "role": "system",
+                                "content": "Stop calling tools. Use ONLY the tool results already in this conversation to answer the user's original question now. If the results contain the answer, quote them verbatim. If they don't, say exactly what's missing — do not guess.",
+                            ])
+                        }
+
                         let resp = try await client.chat(
                             model: model,
                             messages: history,
-                            tools: tools.isEmpty ? nil : tools,
-                            temperature: temperature,
+                            tools: isFinalIteration ? nil : (tools.isEmpty ? nil : tools),
+                            temperature: adaptiveTemperature(toolCallCount: totalToolCalls),
                             numCtx: numCtx,
                             timeout: 120
                         )
 
                         appendToHistory(["role": "assistant", "content": resp.content])
+
+                        // Final iteration: emit whatever the model produced and stop.
+                        if isFinalIteration {
+                            let content = ThinkingStripper.strip(resp.content)
+                                .trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !content.isEmpty {
+                                continuation.yield(.text(content))
+                            }
+                            continuation.finish()
+                            return
+                        }
 
                         guard let toolCalls = resp.toolCalls, !toolCalls.isEmpty else {
                             var content = ThinkingStripper.strip(resp.content)
@@ -618,6 +668,8 @@ class BaseAgent {
                         }
                     }
 
+                    // Unreachable — the final iteration above always yields
+                    // and finishes. Defensive fallback only.
                     continuation.yield(.text("Max tool iterations reached."))
                     continuation.finish()
                 } catch {
