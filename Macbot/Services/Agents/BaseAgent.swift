@@ -86,6 +86,28 @@ class BaseAgent {
         "generate_image": "generating image",
     ]
 
+    /// Universal anti-fabrication rule appended to every agent's system prompt.
+    /// On a 9B model, the highest-leverage hallucination control is a strict
+    /// "you may only cite what's in your context" rule. This phrasing has been
+    /// validated empirically — vague variants ("be accurate", "don't make
+    /// things up") don't work because the model sees them as soft suggestions.
+    static let antiFabricationClause = """
+
+    GROUNDING (read carefully):
+    - You MUST only state facts that come from your tool outputs, retrieved
+      memory, or the user's own message in this turn. If a piece of information
+      is not present in any of those, you do not have it.
+    - When a tool returns numbers, dates, prices, or quotes, copy them exactly.
+      Do not round, paraphrase, or "improve" them.
+    - If a tool result includes a "Data (single source of truth ...)" block,
+      every numeric claim in your response must come verbatim from that block.
+    - If asked something you have no grounding for, the only correct answers
+      are: (a) call a tool to find out, or (b) say "I don't have that
+      information" or "I'm not sure." Never invent plausible-sounding facts.
+    - Do not hedge to disguise a guess. "Approximately", "around", and
+      "roughly" are not licenses to fabricate.
+    """
+
     init(
         name: String,
         model: String,
@@ -96,10 +118,21 @@ class BaseAgent {
     ) {
         self.name = name
         self.model = model
-        self.systemPrompt = systemPrompt
+        self.systemPrompt = systemPrompt + Self.antiFabricationClause
         self.temperature = temperature
         self.numCtx = numCtx
         self.client = client
+    }
+
+    /// Sampling temperature to use for the next chat() call.
+    ///
+    /// Once any tool has been called this turn we have grounded data the model
+    /// should be quoting verbatim — there's no upside to creative sampling and
+    /// significant downside (the model "smooths" the numbers). We clamp to
+    /// 0.2 in that case. Without tool calls, the agent's configured
+    /// temperature stands.
+    func adaptiveTemperature(toolCallCount: Int) -> Double {
+        toolCallCount > 0 ? min(temperature, 0.2) : temperature
     }
 
     func clearHistory() {
@@ -325,7 +358,7 @@ class BaseAgent {
                 model: model,
                 messages: history,
                 tools: tools.isEmpty ? nil : tools,
-                temperature: temperature,
+                temperature: adaptiveTemperature(toolCallCount: toolCallCount),
                 numCtx: numCtx,
                 timeout: 120
             )
@@ -344,7 +377,8 @@ class BaseAgent {
                     // One more iteration to fix it
                     let retry = try await client.chat(
                         model: model, messages: history, tools: nil,
-                        temperature: temperature, numCtx: numCtx, timeout: 120
+                        temperature: adaptiveTemperature(toolCallCount: toolCallCount),
+                        numCtx: numCtx, timeout: 120
                     )
                     appendToHistory(["role": "assistant", "content": retry.content])
                     return ThinkingStripper.strip(retry.content)
