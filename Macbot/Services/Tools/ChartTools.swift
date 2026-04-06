@@ -371,6 +371,21 @@ enum ChartTools {
 
         plt.savefig('\(chartPath)', dpi=150, bbox_inches='tight', facecolor=BG)
         plt.close('all')
+
+        # -- Stats: emitted on stdout for the LLM so its text response uses
+        # the same numbers the chart was drawn with. Single source of truth. --
+        import json as _json
+        _stats = {
+            'ticker': ticker,
+            'period': period,
+            'start_price': round(float(prices[0]), 2),
+            'end_price': round(float(prices[-1]), 2),
+            'pct_change': round(float((prices[-1] / prices[0] - 1) * 100), 2),
+            'period_high': round(float(max(prices)), 2),
+            'period_low': round(float(min(prices)), 2),
+            'data_points': len(prices),
+        }
+        print('STATS:' + _json.dumps(_stats))
         print('OK')
         """
 
@@ -446,6 +461,7 @@ enum ChartTools {
         fig, ax = plt.subplots(figsize=(13, 7))
         fig.subplots_adjust(left=0.08, right=0.88, top=0.90, bottom=0.12)
         plotted = []
+        stats_rows = []  # source of truth for both chart and LLM text response
 
         for i, ticker in enumerate(tickers):
             try:
@@ -461,6 +477,13 @@ enum ChartTools {
                         fontsize=9, fontweight='bold', color=color, va='center', ha='left', zorder=5
                     )
                     plotted.append((ticker, pct[-1]))
+                    stats_rows.append({
+                        'ticker': ticker,
+                        'start_price': round(float(prices[0]), 2),
+                        'end_price': round(float(prices[-1]), 2),
+                        'pct_change': round(float(pct[-1]), 2),
+                        'data_points': len(prices),
+                    })
             except Exception as e:
                 print(f'Warning: could not fetch {ticker}: {e}', file=sys.stderr)
 
@@ -510,6 +533,11 @@ enum ChartTools {
 
         plt.savefig('\(chartPath)', dpi=150, bbox_inches='tight', facecolor=BG)
         plt.close('all')
+
+        # -- Stats: emitted on stdout for the LLM so its text response uses
+        # the same numbers the chart was drawn with. Single source of truth. --
+        import json as _json
+        print('STATS:' + _json.dumps({'period': period, 'tickers': stats_rows}))
         print('OK')
         """
 
@@ -599,7 +627,13 @@ enum ChartTools {
             }
 
             if FileManager.default.fileExists(atPath: chartPath) {
-                return "\(label)\n[IMAGE:\(chartPath)]"
+                let stdout = String(data: outPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                let statsBlock = formatStatsBlock(stdout: stdout)
+                if statsBlock.isEmpty {
+                    return "\(label)\n[IMAGE:\(chartPath)]"
+                }
+                // Stats first so the LLM cites them in its response, image second.
+                return "\(label)\n\(statsBlock)\n[IMAGE:\(chartPath)]"
             }
 
             let stderr = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
@@ -613,6 +647,72 @@ enum ChartTools {
         } catch {
             return "Error: \(error.localizedDescription)"
         }
+    }
+
+    /// Parses `STATS:{json}` lines from a chart script's stdout and renders
+    /// them as plain text the model can quote verbatim. Returns empty string
+    /// if no stats line is present.
+    ///
+    /// The contract: every chart-producing Python script that has numeric
+    /// data prints exactly one line of the form `STATS:<json>` to stdout
+    /// before `print('OK')`. The JSON is either a single-ticker dict
+    /// (`{ticker, period, start_price, end_price, pct_change, ...}`) or a
+    /// comparison dict (`{period, tickers: [{ticker, start_price, ...}, ...]}`).
+    /// This single source of truth keeps the chart and the LLM's text aligned.
+    static func formatStatsBlock(stdout: String) -> String {
+        for line in stdout.components(separatedBy: "\n") {
+            guard line.hasPrefix("STATS:") else { continue }
+            let jsonStr = String(line.dropFirst("STATS:".count))
+            guard let data = jsonStr.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { continue }
+            return renderStats(obj)
+        }
+        return ""
+    }
+
+    private static func renderStats(_ obj: [String: Any]) -> String {
+        let period = (obj["period"] as? String).map { $0.uppercased() } ?? ""
+        var lines: [String] = []
+
+        // Comparison-style payload
+        if let tickers = obj["tickers"] as? [[String: Any]] {
+            lines.append("Data (single source of truth — use these exact numbers in your response):")
+            for entry in tickers {
+                lines.append(formatTickerLine(entry, period: period))
+            }
+            return lines.joined(separator: "\n")
+        }
+
+        // Single-ticker payload
+        if obj["ticker"] is String {
+            lines.append("Data (single source of truth — use these exact numbers in your response):")
+            lines.append(formatTickerLine(obj, period: period))
+            if let hi = obj["period_high"] as? Double {
+                lines.append(String(format: "Period high: $%.2f", hi))
+            }
+            if let lo = obj["period_low"] as? Double {
+                lines.append(String(format: "Period low: $%.2f", lo))
+            }
+            return lines.joined(separator: "\n")
+        }
+
+        return ""
+    }
+
+    private static func formatTickerLine(_ entry: [String: Any], period: String) -> String {
+        let sym = entry["ticker"] as? String ?? "?"
+        let pct = (entry["pct_change"] as? Double) ?? Double(entry["pct_change"] as? Int ?? 0)
+        let start = (entry["start_price"] as? Double) ?? Double(entry["start_price"] as? Int ?? 0)
+        let end = (entry["end_price"] as? Double) ?? Double(entry["end_price"] as? Int ?? 0)
+        let sign = pct >= 0 ? "+" : ""
+        let pctStr = String(format: "%.2f", pct)
+        let startStr = String(format: "%.2f", start)
+        let endStr = String(format: "%.2f", end)
+        if period.isEmpty {
+            return "\(sym): \(sign)\(pctStr)% (start $\(startStr) → end $\(endStr))"
+        }
+        return "\(sym) \(period): \(sign)\(pctStr)% (start $\(startStr) → end $\(endStr))"
     }
 
     // MARK: - File Grab
