@@ -76,16 +76,17 @@ enum FinanceTools {
 
             let direction = change >= 0 ? "up" : "down"
 
-            var result_str = """
+            var body = """
             \(name) (\(symbol))
             Price: $\(String(format: "%.2f", price)) (\(direction) $\(String(format: "%.2f", abs(change))), \(String(format: "%+.2f", changePct))%)
+            Previous close: $\(String(format: "%.2f", prevClose))
             """
 
             if dayLow > 0 && dayHigh > 0 {
-                result_str += "\nDay Range: $\(String(format: "%.2f", dayLow)) - $\(String(format: "%.2f", dayHigh))"
+                body += "\nDay range: $\(String(format: "%.2f", dayLow)) - $\(String(format: "%.2f", dayHigh))"
             }
 
-            return result_str
+            return GroundedResponse.format(source: "Yahoo Finance", body: body)
 
         } catch {
             return "Error fetching stock data: \(error.localizedDescription)"
@@ -152,15 +153,16 @@ enum FinanceTools {
 
             let periodLabel = normalizedPeriod == "ytd" ? "year-to-date" : normalizedPeriod
 
-            return """
+            let body = """
             \(symbol) — \(periodLabel) performance
             Start: $\(String(format: "%.2f", startPrice))
             Current: $\(String(format: "%.2f", currentPrice))
             Change: $\(String(format: "%+.2f", change)) (\(String(format: "%+.2f", changePct))%)
-            Period High: $\(String(format: "%.2f", high))
-            Period Low: $\(String(format: "%.2f", low))
-            Trading Days: \(validCloses.count)
+            Period high: $\(String(format: "%.2f", high))
+            Period low: $\(String(format: "%.2f", low))
+            Trading days: \(validCloses.count)
             """
+            return GroundedResponse.format(source: "Yahoo Finance", body: body)
 
         } catch {
             return "Error: \(error.localizedDescription)"
@@ -174,7 +176,7 @@ enum FinanceTools {
             ("Dow Jones", "^DJI"),
         ]
 
-        var lines = ["Market Summary"]
+        var lines: [String] = []
         for (name, symbol) in indices {
             let encoded = symbol.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? symbol
             guard let url = URL(string: "https://query1.finance.yahoo.com/v8/finance/chart/\(encoded)?interval=1d&range=1d") else {
@@ -207,6 +209,9 @@ enum FinanceTools {
             }
         }
 
-        return lines.joined(separator: "\n")
+        return GroundedResponse.format(
+            source: "Yahoo Finance",
+            body: lines.joined(separator: "\n")
+        )
     }
 }

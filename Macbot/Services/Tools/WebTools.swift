@@ -76,7 +76,14 @@ enum WebTools {
                 results.append("[\(title.trimmingCharacters(in: .whitespaces))]\n\(snippet.trimmingCharacters(in: .whitespaces))\n\(finalURL)")
             }
 
-            return results.isEmpty ? "No results found for: \(query)" : results.joined(separator: "\n\n")
+            if results.isEmpty {
+                return "No results found for: \(query)"
+            }
+            return GroundedResponse.searchResults(
+                source: "DuckDuckGo",
+                query: query,
+                body: results.joined(separator: "\n\n")
+            )
         } catch {
             return "Search failed: \(error.localizedDescription)"
         }
@@ -110,7 +117,15 @@ enum WebTools {
                 text = String(text.prefix(8000)) + "\n... (truncated)"
             }
 
-            return text.isEmpty ? "(empty page)" : text
+            if text.isEmpty {
+                return "(empty page) — \(urlString)"
+            }
+            // Echo the source URL inline so the model cannot fabricate one
+            // when quoting from this page later in its response.
+            return GroundedResponse.format(
+                source: "URL \(urlString)",
+                body: text
+            )
         } catch {
             return "Failed to fetch page: \(error.localizedDescription)"
         }
