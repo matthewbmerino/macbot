@@ -12,6 +12,8 @@ let package = Package(
         .package(url: "https://github.com/ml-explore/mlx-swift", .upToNextMinor(from: "0.30.3")),
         // Tokenizers for HuggingFace models
         .package(url: "https://github.com/huggingface/swift-transformers", .upToNextMinor(from: "1.1.0")),
+        // MLX StableDiffusion — on-device image generation
+        .package(url: "https://github.com/ml-explore/mlx-swift-examples", .upToNextMinor(from: "1.0.0")),
     ],
     targets: [
         .executableTarget(
@@ -28,6 +30,8 @@ let package = Package(
                 // HuggingFace tokenizers + hub download
                 .product(name: "Transformers", package: "swift-transformers"),
                 .product(name: "Hub", package: "swift-transformers"),
+                // On-device image generation (SDXL-Turbo via MLX)
+                .product(name: "StableDiffusion", package: "mlx-swift-examples"),
             ],
             path: "Macbot",
             linkerSettings: [

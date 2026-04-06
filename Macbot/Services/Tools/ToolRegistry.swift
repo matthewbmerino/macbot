@@ -34,6 +34,7 @@ actor ToolRegistry {
         "email": (["email", "mail", "draft", "compose", "write an email", "send", "inbox", "messages"], ["email_draft", "email_read"]),
         "media": (["music", "song", "playing", "spotify", "play", "pause", "skip", "next track", "what's playing", "now playing", "volume"], ["now_playing", "media_control", "set_volume", "search_play"]),
         "qr": (["qr", "qr code", "barcode", "scan code"], ["generate_qr"]),
+        "imagegen": (["generate image", "create image", "draw", "make an image", "picture of", "illustration", "ai art", "imagine", "create a picture", "make a picture", "generate a photo"], ["generate_image"]),
     ]
 
     // Groups that commonly need each other — if one matches, include the other

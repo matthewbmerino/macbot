@@ -387,6 +387,7 @@ final class Orchestrator {
                 await EmailTools.register(on: agent.toolRegistry)
                 await MediaTools.register(on: agent.toolRegistry)
                 await QRTools.register(on: agent.toolRegistry)
+                await ImageGenTools.register(on: agent.toolRegistry)
             }
         }
 

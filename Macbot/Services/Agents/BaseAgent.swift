@@ -77,6 +77,7 @@ class BaseAgent {
         "media_control": "controlling music",
         "search_play": "searching music",
         "generate_qr": "generating QR code",
+        "generate_image": "generating image",
     ]
 
     init(
