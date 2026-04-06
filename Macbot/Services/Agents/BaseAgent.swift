@@ -177,36 +177,34 @@ class BaseAgent {
         }
     }
 
-    // MARK: - Planning
+    // MARK: - Planning (uses primary model for quality)
 
     private func generatePlan(_ input: String) async -> String? {
         let prompt = """
-        You are planning a task. Output ONLY a numbered list of 2-5 steps. \
-        Each step should be one short sentence naming the specific action. \
-        After each step, estimate the time in seconds (5-30s for tool calls, 10-60s for browsing). \
-        Format: 1. [action] (~Xs)
-        Do not include any other text. Do not execute anything.
+        Break this task into 2-5 numbered steps. For each step, name the specific tool to use. \
+        Format: 1. [action] — [tool_name] (~Xs)
+        Output ONLY the numbered list, nothing else.
 
         Task: \(input)
         """
 
         do {
             let resp = try await client.chat(
-                model: "qwen3.5:0.8b",
+                model: model,
                 messages: [
                     ["role": "system", "content": prompt],
                     ["role": "user", "content": input],
                 ],
                 tools: nil,
                 temperature: 0.2,
-                numCtx: 2048,
+                numCtx: min(numCtx, 4096),
                 timeout: 30
             )
             let plan = ThinkingStripper.strip(resp.content)
             if !plan.isEmpty {
                 appendToHistory([
                     "role": "system",
-                    "content": "Execute this plan step by step. After each tool call, briefly note which step you just completed before moving on.\n\nPlan:\n\(plan)",
+                    "content": "Execute this plan step by step. After each tool call, state which step you completed and what you learned. Then proceed to the next step.\n\nPlan:\n\(plan)",
                 ])
                 Log.agents.info("[\(self.name)] plan generated")
             }
@@ -214,6 +212,62 @@ class BaseAgent {
         } catch {
             Log.agents.warning("[\(self.name)] planning failed: \(error)")
             return nil
+        }
+    }
+
+    // MARK: - Tool Result Compression
+
+    /// Compress large tool results to preserve context budget.
+    private func compressToolResult(_ result: String, toolName: String) -> String {
+        guard result.count > 2000 else { return result }
+
+        // Keep full output for small results or structured data
+        let structuredTools: Set = ["calculator", "unit_convert", "date_calc", "get_stock_price",
+                                     "get_market_summary", "weather_lookup", "define_word",
+                                     "git_status", "ping", "port_check", "dns_lookup"]
+        if structuredTools.contains(toolName) { return result }
+
+        // For large text outputs, truncate intelligently
+        let lines = result.components(separatedBy: "\n")
+        if lines.count > 50 {
+            // Keep first 20 and last 10 lines
+            let head = lines.prefix(20).joined(separator: "\n")
+            let tail = lines.suffix(10).joined(separator: "\n")
+            return "\(head)\n\n... (\(lines.count - 30) lines omitted) ...\n\n\(tail)"
+        }
+
+        // Simple truncation with notice
+        return String(result.prefix(2000)) + "\n... (truncated from \(result.count) chars)"
+    }
+
+    // MARK: - Self-Verification
+
+    /// Lightweight check: does the response actually answer the question?
+    private func verify(response: String, originalQuery: String) async -> String? {
+        // Skip verification for very short or tool-heavy responses
+        guard response.count > 50 else { return nil }
+
+        do {
+            let resp = try await client.chat(
+                model: "qwen3.5:0.8b",
+                messages: [
+                    ["role": "system", "content": "You are a response validator. Given a user question and an AI response, determine if the response ACTUALLY ANSWERS the question. Respond with ONLY one word: GOOD, INCOMPLETE, or WRONG. No other text."],
+                    ["role": "user", "content": "Question: \(String(originalQuery.prefix(300)))\n\nResponse: \(String(response.prefix(500)))"],
+                ],
+                tools: nil,
+                temperature: 0.0,
+                numCtx: 1024,
+                timeout: 8
+            )
+
+            let verdict = ThinkingStripper.strip(resp.content).uppercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            if verdict.contains("INCOMPLETE") || verdict.contains("WRONG") {
+                Log.agents.info("[\(self.name)] verification: \(verdict) — requesting retry")
+                return verdict.contains("INCOMPLETE") ? "incomplete" : "wrong"
+            }
+            return nil  // GOOD — no retry needed
+        } catch {
+            return nil  // Verification failed — don't block the response
         }
     }
 
@@ -259,7 +313,24 @@ class BaseAgent {
             appendToHistory(["role": "assistant", "content": resp.content])
 
             guard let toolCalls = resp.toolCalls, !toolCalls.isEmpty else {
-                return ThinkingStripper.strip(resp.content)
+                let response = ThinkingStripper.strip(resp.content)
+
+                // Self-verification: does this actually answer the question?
+                if toolCallCount > 0, let issue = await verify(response: response, originalQuery: input) {
+                    let nudge = issue == "incomplete"
+                        ? "Your response was incomplete. Re-read the original question and make sure you address every part of it."
+                        : "Your response didn't correctly answer the question. Re-read it carefully and try again."
+                    appendToHistory(["role": "system", "content": nudge])
+                    // One more iteration to fix it
+                    let retry = try await client.chat(
+                        model: model, messages: history, tools: nil,
+                        temperature: temperature, numCtx: numCtx, timeout: 120
+                    )
+                    appendToHistory(["role": "assistant", "content": retry.content])
+                    return ThinkingStripper.strip(retry.content)
+                }
+
+                return response
             }
 
             // Log tool calls and track for recency bias
@@ -269,10 +340,11 @@ class BaseAgent {
             recentTools = toolNames
             Log.agents.info("[\(self.name)] calling tools: \(toolNames.joined(separator: ", "))")
 
-            // Execute tools in parallel
+            // Execute tools in parallel, compress large results
             let results = await toolRegistry.executeAll(toolCalls)
             for (name, result) in results {
-                appendToHistory(["role": "tool", "content": result])
+                let compressed = compressToolResult(result, toolName: name)
+                appendToHistory(["role": "tool", "content": compressed])
                 lastToolUsed = name
                 lastToolFailed = result.hasPrefix("Error:")
             }
@@ -287,7 +359,6 @@ class BaseAgent {
                     toolResults: results.map(\.1)
                 )
                 if !shouldContinue {
-                    // Inject a reflection nudge to help the model synthesize
                     appendToHistory([
                         "role": "system",
                         "content": "You have gathered enough information. Synthesize your findings and respond to the user's original question directly. Do not call more tools.",
@@ -428,7 +499,8 @@ class BaseAgent {
                         let imagePattern = try? NSRegularExpression(pattern: "\\[IMAGE:(.*?)\\]")
                         let results = await toolRegistry.executeAll(toolCalls)
                         for (name, result) in results {
-                            appendToHistory(["role": "tool", "content": result])
+                            let compressed = compressToolResult(result, toolName: name)
+                            appendToHistory(["role": "tool", "content": compressed])
                             lastToolUsed = name
                             lastToolFailed = result.hasPrefix("Error:")
 

@@ -33,14 +33,30 @@ final class Orchestrator {
     var parallelAgentsEnabled: Bool = false
     var mixtureOfAgentsEnabled: Bool = false
 
-    // Fast routing patterns
+    // Fast routing patterns — deterministic, no LLM needed
     private static let codePattern = try! NSRegularExpression(
-        pattern: "```|def\\s+\\w|function\\s+\\w|class\\s+\\w|import\\s+\\w|const\\s+\\w|npm\\s|pip\\s|git\\s",
-        options: .caseInsensitive
+        pattern: """
+        ```|def\\s+\\w|function\\s+\\w|class\\s+\\w|import\\s+\\w|const\\s+\\w|\
+        npm\\s|pip\\s|git\\s|cargo\\s|make\\s|brew\\s|\
+        \\bsyntax\\b|\\bbug\\b|\\bdebug\\b|\\brefactor\\b|\\bcompile\\b|\\bbuild error\\b|\
+        \\bwrite.*code\\b|\\bwrite.*script\\b|\\bwrite.*function\\b|\\bwrite.*program\\b|\
+        \\bfix.*code\\b|\\bfix.*bug\\b|\\bfix.*error\\b|\
+        \\bpython\\b|\\bjavascript\\b|\\btypescript\\b|\\bswift\\b|\\brust\\b|\\bjava\\b|\\bhtml\\b|\\bcss\\b|\
+        \\bapi\\b.*\\b(endpoint|request|response)\\b|\\bjson\\b.*\\b(parse|format|schema)\\b|\
+        \\bregex\\b|\\balgorithm\\b|\\bdata structure\\b
+        """,
+        options: [.caseInsensitive, .allowCommentsAndWhitespace]
     )
     private static let mathPattern = try! NSRegularExpression(
-        pattern: "\\bcalculate\\b|\\bsolve\\b|\\bprove\\b|\\bderivative\\b|\\bintegral\\b|\\d+\\s*[+\\-*/^]\\s*\\d+",
-        options: .caseInsensitive
+        pattern: """
+        \\bcalculate\\b|\\bsolve\\b|\\bprove\\b|\\bderivative\\b|\\bintegral\\b|\
+        \\bequation\\b|\\bformula\\b|\\bprobability\\b|\\bstatistic\\b|\
+        \\bsquare root\\b|\\blogarithm\\b|\\btrigonometr\\b|\\bgeometr\\b|\
+        \\bmath\\b|\\barithmetic\\b|\\balgebra\\b|\\bcalculus\\b|\
+        \\bhow many\\b.*\\bif\\b|\\bwhat is\\b.*\\b(percent|ratio|average|sum|product)\\b|\
+        \\d+\\s*[+\\-*/^]\\s*\\d+|\\d+\\s*%\\s*(of|from)
+        """,
+        options: [.caseInsensitive, .allowCommentsAndWhitespace]
     )
     private static let complexPattern = try! NSRegularExpression(
         pattern: "\\band\\b.*\\band\\b|\\bthen\\b|\\bstep.by.step\\b|\\bresearch\\b.*\\b(write|create|build|compare|summarize)\\b|\\bfind\\b.*\\b(and|then)\\b.*\\b(compare|summarize|write|create)\\b|\\banalyze\\b.*\\band\\b|\\bplan\\b",
@@ -284,15 +300,16 @@ final class Orchestrator {
     private func shouldSkipRouter(conv: ConversationState, message: String, hasImages: Bool) -> AgentCategory? {
         if hasImages { return .vision }
 
-        let gap = Date().timeIntervalSince(conv.lastMessageTime)
-        if gap > Self.affinityResetGap { return nil }
-
         let range = NSRange(message.startIndex..., in: message)
 
+        // Deterministic pattern matching — always fires, no affinity required
         if Self.codePattern.firstMatch(in: message, range: range) != nil { return .coder }
         if Self.mathPattern.firstMatch(in: message, range: range) != nil { return .reasoner }
 
-        if conv.consecutiveSameAgent >= Self.affinityMinMessages
+        // Affinity: stick with current agent for follow-up messages
+        let gap = Date().timeIntervalSince(conv.lastMessageTime)
+        if gap < Self.affinityResetGap
+            && conv.consecutiveSameAgent >= Self.affinityMinMessages
             && gap < Self.affinityTimeout
             && conv.currentAgent != .general {
             return conv.currentAgent
