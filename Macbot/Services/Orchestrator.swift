@@ -11,6 +11,41 @@ final class Orchestrator {
     let compositeToolStore: CompositeToolStore
     var modelConfig: ModelConfig
 
+    /// Stable session identifier for trace correlation. Reset on /clear via
+    /// ConversationState.sessionStartedAt.
+    func sessionId(for conv: ConversationState, userId: String) -> String {
+        let ts = Int(conv.sessionStartedAt.timeIntervalSince1970)
+        return "\(userId)-\(ts)"
+    }
+
+    /// Walk the agent's history added during this turn and pull out tool calls
+    /// + their results into the trace builder.
+    func extractToolCalls(from agent: BaseAgent, since startCount: Int, into trace: TraceBuilder) {
+        guard agent.history.count > startCount else { return }
+        let new = agent.history[startCount...]
+        var pendingByName: [String: [String: Any]] = [:]
+        var startTime = Date()
+        for msg in new {
+            guard let role = msg["role"] as? String else { continue }
+            if role == "assistant", let calls = msg["tool_calls"] as? [[String: Any]] {
+                for call in calls {
+                    guard let function = call["function"] as? [String: Any],
+                          let name = function["name"] as? String
+                    else { continue }
+                    let args = function["arguments"] as? [String: Any] ?? [:]
+                    pendingByName[name] = args
+                    startTime = Date()
+                }
+            } else if role == "tool" {
+                let name = msg["name"] as? String ?? ""
+                let result = msg["content"] as? String ?? ""
+                let args = pendingByName.removeValue(forKey: name) ?? [:]
+                let elapsed = Int(Date().timeIntervalSince(startTime) * 1000)
+                trace.recordToolCall(name: name, args: args, result: result, latencyMs: elapsed)
+            }
+        }
+    }
+
     /// Returns the resolved model name for an agent category.
     func modelName(for category: AgentCategory) -> String {
         switch category {
@@ -198,7 +233,30 @@ final class Orchestrator {
         conv.messageCount += 1
         injectPromptModules(agent: agent, conv: conv, isPlanning: plan, message: message)
 
-        return try await agent.run(message, images: images, plan: plan)
+        // Trace begin
+        let trace = TraceBuilder(
+            sessionId: sessionId(for: conv, userId: userId),
+            userId: userId,
+            turnIndex: conv.messageCount,
+            userMessage: message
+        )
+        trace.routedAgent = category.rawValue
+        trace.modelUsed = modelName(for: category)
+        trace.ambientSnapshot = await AmbientMonitor.shared.current()
+        let historyBeforeCount = agent.history.count
+
+        do {
+            let response = try await agent.run(message, images: images, plan: plan)
+            trace.assistantResponse = response
+            extractToolCalls(from: agent, since: historyBeforeCount, into: trace)
+            TraceStore.shared.commit(trace)
+            return response
+        } catch {
+            trace.error = "\(error)"
+            extractToolCalls(from: agent, since: historyBeforeCount, into: trace)
+            TraceStore.shared.commit(trace)
+            throw error
+        }
     }
 
     func handleMessageStream(
@@ -249,14 +307,35 @@ final class Orchestrator {
                     conv.messageCount += 1
                     injectPromptModules(agent: agent, conv: conv, isPlanning: plan, message: message)
 
+                    // Trace begin
+                    let trace = TraceBuilder(
+                        sessionId: sessionId(for: conv, userId: userId),
+                        userId: userId,
+                        turnIndex: conv.messageCount,
+                        userMessage: message
+                    )
+                    trace.routedAgent = category.rawValue
+                    trace.modelUsed = modelName(for: category)
+                    trace.ambientSnapshot = await AmbientMonitor.shared.current()
+                    let historyBeforeCount = agent.history.count
+
+                    var streamedText = ""
                     for try await event in agent.runStream(message, images: images, plan: plan) {
-                        // Log status events to the activity feed
                         if case .status(let status) = event {
                             ActivityLog.shared.log(.inference, status)
+                        }
+                        if case .text(let chunk) = event {
+                            streamedText += chunk
                         }
                         continuation.yield(event)
                     }
                     ActivityLog.shared.log(.inference, "Response complete")
+
+                    // Trace commit
+                    trace.assistantResponse = streamedText
+                    extractToolCalls(from: agent, since: historyBeforeCount, into: trace)
+                    TraceStore.shared.commit(trace)
+
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)

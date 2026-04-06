@@ -130,6 +130,34 @@ final class DatabaseManager {
             }
         }
 
+        // Trace layer — structured log of every user→assistant turn.
+        // Foundation for: replay, eval harness, learned routing, skill
+        // distillation, regression detection, on-device personalization.
+        migrator.registerMigration("v7_traces") { db in
+            try db.create(table: "interaction_traces") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("sessionId", .text).notNull()
+                t.column("userId", .text).notNull().defaults(to: "local")
+                t.column("turnIndex", .integer).notNull().defaults(to: 0)
+                t.column("userMessage", .text).notNull()
+                t.column("userMessageEmbedding", .blob)
+                t.column("routedAgent", .text).notNull()
+                t.column("routeReason", .text).defaults(to: "")
+                t.column("modelUsed", .text).notNull()
+                t.column("toolCalls", .text).defaults(to: "[]")     // JSON array
+                t.column("assistantResponse", .text).notNull()
+                t.column("responseTokens", .integer).defaults(to: 0)
+                t.column("latencyMs", .integer).defaults(to: 0)
+                t.column("error", .text)
+                t.column("ambientSnapshot", .text).defaults(to: "{}")
+                t.column("metadata", .text).defaults(to: "{}")
+                t.column("createdAt", .datetime).notNull()
+            }
+            try db.create(index: "idx_traces_session", on: "interaction_traces", columns: ["sessionId"])
+            try db.create(index: "idx_traces_createdAt", on: "interaction_traces", columns: ["createdAt"])
+            try db.create(index: "idx_traces_agent", on: "interaction_traces", columns: ["routedAgent"])
+        }
+
         // Episodic memory — auto-summarized conversation episodes
         migrator.registerMigration("v6_episodes") { db in
             try db.create(table: "episodes") { t in

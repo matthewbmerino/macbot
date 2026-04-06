@@ -13,6 +13,55 @@ enum CommandHandler {
         let rest = parts.count > 1 ? String(parts[1]) : ""
 
         switch cmd {
+        case "/eval":
+            // Run the held-out eval set against the live orchestrator.
+            // Use sparingly — touches every model, takes a minute or two.
+            let report = await EvalHarness.run(orchestrator: orchestrator)
+            return report.summary
+
+        case "/traces":
+            let n = Int(rest.trimmingCharacters(in: .whitespaces)) ?? 10
+            let traces = TraceStore.shared.recent(limit: n)
+            if traces.isEmpty { return "No traces recorded yet." }
+            let total = TraceStore.shared.count()
+            let lines = traces.map { t -> String in
+                let dur = "\(t.latencyMs)ms"
+                let tools = t.toolCallList.map { $0["name"] as? String ?? "?" }.joined(separator: ",")
+                let toolStr = tools.isEmpty ? "" : " [\(tools)]"
+                let preview = t.userMessage.prefix(60)
+                return "#\(t.id ?? 0) \(t.routedAgent) \(dur) \(t.modelUsed)\(toolStr)\n  > \(preview)"
+            }
+            return "Traces (\(traces.count) of \(total) total):\n\n\(lines.joined(separator: "\n"))"
+
+        case "/inspect":
+            guard let id = Int64(rest.trimmingCharacters(in: .whitespaces)) else {
+                return "Usage: /inspect <trace_id>"
+            }
+            let recent = TraceStore.shared.recent(limit: 500)
+            guard let t = recent.first(where: { $0.id == id }) else {
+                return "Trace #\(id) not found in recent 500."
+            }
+            var out: [String] = []
+            out.append("Trace #\(id)")
+            out.append("Session: \(t.sessionId)  turn: \(t.turnIndex)")
+            out.append("Agent: \(t.routedAgent) (\(t.routeReason))")
+            out.append("Model: \(t.modelUsed)")
+            out.append("Latency: \(t.latencyMs)ms  tokens: \(t.responseTokens)")
+            if let err = t.error, !err.isEmpty { out.append("Error: \(err)") }
+            out.append("")
+            out.append("USER:")
+            out.append(t.userMessage)
+            out.append("")
+            for (i, call) in t.toolCallList.enumerated() {
+                let name = call["name"] as? String ?? "?"
+                let result = (call["result"] as? String ?? "").prefix(200)
+                out.append("TOOL \(i + 1) [\(name)]: \(result)")
+            }
+            out.append("")
+            out.append("ASSISTANT:")
+            out.append(t.assistantResponse)
+            return out.joined(separator: "\n")
+
         case "/upgrade", "/big":
             // Re-run the most recent user message through the reasoner (largest model)
             // for a more thorough answer.
