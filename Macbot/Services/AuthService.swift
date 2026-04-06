@@ -15,6 +15,12 @@ final class AuthService {
     // MARK: - Biometric Auth
 
     func authenticate() {
+        // Idempotent: a second caller while a Touch ID prompt is already on
+        // screen (or after a successful unlock) is a no-op. Without this
+        // guard, SwiftUI's MenuBarExtra + Window dual-scene lifecycle could
+        // surface two prompts on launch.
+        guard !isUnlocked, !isAuthenticating else { return }
+
         let context = LAContext()
         context.localizedCancelTitle = "Cancel"
 

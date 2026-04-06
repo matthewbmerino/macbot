@@ -84,8 +84,10 @@ final class AppState {
     var isReady = false
 
     init() {
-        authService.authenticate()
-
+        // Auth is triggered exclusively by LockScreen.onAppear (the main
+        // window's gated content). Triggering it here as well caused two
+        // Touch ID prompts on launch — one tied to the menu bar's AppState
+        // init path, one tied to the main window's LockScreen appearing.
         Task.detached { [weak self] in
             guard let self else { return }
 
