@@ -6,51 +6,9 @@ prioritize them.
 
 ## Bugs
 
-### `Memory` and `DocumentChunk` use the wrong GRDB conformance
-
-Both record types conform to `PersistableRecord` (immutable) instead of
-`MutablePersistableRecord`. As a result, after `try record.insert(db)` the
-`record.id` field is never backfilled with the auto-assigned row id.
-
-Observable consequences:
-
-- `MemoryStore.save()` returns `0` for every memory because of
-  `guard let id = memory.id else { return 0 }`. The row is persisted, but
-  the embedding queue is enqueued with `id = 0`, so the asynchronous
-  `UPDATE memories SET embedding = ? WHERE id = 0` never matches a row and
-  semantic memory embeddings silently never populate. Vector index growth
-  for new saves only happens via `loadVectorIndex()` on next launch.
-- `ChunkStore.insertChunks()` returns an empty `[Int64]` array because the
-  same code path checks `if let id = record.id`. The in-memory vector
-  index is never updated inside `insertChunks` either — it only repopulates
-  via `loadVectorIndex()` on next launch.
-
-Fix is small but behavior-affecting: change conformance to
-`MutablePersistableRecord` and add `mutating func didInsert(_ inserted: InsertionSuccess) { id = inserted.rowID }`
-to both record structs. Tests `ChunkStoreTests.testInsertAndSemanticSearch`
-and `MemoryStoreTests.testForgetRemovesEntry` document the workaround
-(load from disk, look up id via SQL).
-
-### `OllamaClient.embed` decodes embeddings to `[[Float]]` but gets `[]`
-
-`OllamaClient.embed` does `json["embeddings"] as? [[Float]] ?? []`.
-`JSONSerialization` produces numeric values as `NSNumber`/`Double`, and the
-Swift bridge does **not** coerce `[[Double]]` to `[[Float]]` — the cast
-returns `nil`, so the function silently returns `[]`. This means the
-embedding router, semantic memory search, and RAG hybrid search are likely
-running on the keyword/fallback paths in production rather than the
-intended vector path.
-
-Fix: decode as `[[Double]]` first, then map to `[Float]`:
-
-```swift
-let raw = json["embeddings"] as? [[Double]] ?? []
-return raw.map { $0.map(Float.init) }
-```
-
-`OllamaClientTests.testEmbedRequestShape` documents that the request
-serialization is correct; the response-decoding assertion was removed
-until the bug above is fixed.
+_(All previously listed bugs in this section have been fixed. See git
+log for `MutablePersistableRecord` and `OllamaClient.embed` decoding
+fixes — both were silently disabling semantic memory and RAG.)_
 
 ## Refactor candidates
 

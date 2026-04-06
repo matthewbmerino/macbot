@@ -2,7 +2,7 @@ import Foundation
 import GRDB
 
 /// A chunk of a document, with its embedding for vector search.
-struct DocumentChunk: Codable, FetchableRecord, PersistableRecord, Identifiable {
+struct DocumentChunk: Codable, FetchableRecord, MutablePersistableRecord, Identifiable {
     var id: Int64?
     var sourceFile: String        // Original file path
     var chunkIndex: Int           // Position within the document
@@ -14,6 +14,15 @@ struct DocumentChunk: Codable, FetchableRecord, PersistableRecord, Identifiable 
     var updatedAt: Date
 
     static let databaseTableName = "document_chunks"
+
+    /// GRDB calls this after a successful insert so we can backfill the
+    /// auto-assigned row id. Required — the previous PersistableRecord
+    /// conformance left `id` nil, which broke ChunkStore.insertChunks (it
+    /// returned an empty id array and never updated the in-memory vector
+    /// index inside the same call).
+    mutating func didInsert(_ inserted: InsertionSuccess) {
+        id = inserted.rowID
+    }
 
     /// Deserialize embedding from stored Data.
     var embeddingVector: [Float] {

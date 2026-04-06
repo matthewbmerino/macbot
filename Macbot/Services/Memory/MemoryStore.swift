@@ -2,7 +2,7 @@ import Accelerate
 import Foundation
 import GRDB
 
-struct Memory: Codable, FetchableRecord, PersistableRecord, Identifiable {
+struct Memory: Codable, FetchableRecord, MutablePersistableRecord, Identifiable {
     var id: Int64?
     var category: String
     var content: String
@@ -12,6 +12,14 @@ struct Memory: Codable, FetchableRecord, PersistableRecord, Identifiable {
     var updatedAt: Date
 
     static let databaseTableName = "memories"
+
+    /// GRDB calls this after a successful insert so we can backfill the
+    /// auto-assigned row id. Required — the previous PersistableRecord
+    /// conformance left `id` nil, which broke MemoryStore.save() (always
+    /// returned 0) and the embedding queue (UPDATE WHERE id = 0 never matched).
+    mutating func didInsert(_ inserted: InsertionSuccess) {
+        id = inserted.rowID
+    }
 
     /// Deserialize embedding vector.
     var embeddingVector: [Float]? {

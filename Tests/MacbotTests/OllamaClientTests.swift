@@ -126,18 +126,33 @@ final class OllamaClientTests: XCTestCase {
                        "think flag should be off — leaked thinking tags pollute responses")
     }
 
-    func testEmbedRequestShape() async throws {
-        // NOTE: only verifies request serialization, not response decoding.
-        // OllamaClient.embed currently does `as? [[Float]]` against the
-        // JSONSerialization output, but JSONSerialization produces Double
-        // values — the Swift bridge will not coerce `[[Double]]` to
-        // `[[Float]]`, so the result silently becomes []. Tracked in TODO.md.
-        StubURLProtocol.responseBody = #"{"embeddings":[[0.1,0.2,0.3]]}"#.data(using: .utf8)!
+    func testEmbedRequestShapeAndResponseDecoding() async throws {
+        // Regression: previously OllamaClient.embed used `as? [[Float]]`,
+        // which silently returned [] because JSONSerialization decodes JSON
+        // numbers as Double and the Swift bridge doesn't coerce
+        // [[Double]] -> [[Float]]. That broke the embedding router, semantic
+        // memory search, and RAG hybrid search in production.
+        StubURLProtocol.responseBody = #"{"embeddings":[[0.1,0.2,0.3],[0.4,0.5,0.6]]}"#.data(using: .utf8)!
         let client = makeClient()
-        _ = try? await client.embed(model: "qwen3-embedding:0.6b", text: ["hello"])
+        let result = try await client.embed(model: "qwen3-embedding:0.6b", text: ["hello", "world"])
+        XCTAssertEqual(result.count, 2)
+        XCTAssertEqual(result[0].count, 3)
+        XCTAssertEqual(result[0][0], 0.1, accuracy: 1e-6)
+        XCTAssertEqual(result[1][2], 0.6, accuracy: 1e-6)
+
         let body = try payload()
         XCTAssertEqual(body["model"] as? String, "qwen3-embedding:0.6b")
-        XCTAssertEqual(body["input"] as? [String], ["hello"])
+        XCTAssertEqual(body["input"] as? [String], ["hello", "world"])
         XCTAssertEqual(StubURLProtocol.lastRequestURL?.path, "/api/embed")
+    }
+
+    func testEmbedHandlesIntegerJSONNumbers() async throws {
+        // Some Ollama backends emit zero/one as integers without a trailing
+        // decimal. Make sure those still decode (NSNumber bridging covers
+        // both Double and Int via Int -> Double -> Float).
+        StubURLProtocol.responseBody = #"{"embeddings":[[0,1,0]]}"#.data(using: .utf8)!
+        let client = makeClient()
+        let result = try await client.embed(model: "m", text: ["x"])
+        XCTAssertEqual(result.first, [0, 1, 0])
     }
 }

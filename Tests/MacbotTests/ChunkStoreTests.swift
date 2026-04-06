@@ -29,19 +29,20 @@ final class ChunkStoreTests: XCTestCase {
             ("bananas are yellow", [0, 1, 0], "{}"),
             ("grapes are purple", [0, 0, 1], "{}"),
         ]
-        store.insertChunks(chunks, sourceFile: "/tmp/test.txt")
+        let ids = store.insertChunks(chunks, sourceFile: "/tmp/test.txt")
+        // Regression: prior to the MutablePersistableRecord fix, this returned
+        // [] because GRDB never backfilled the auto-assigned id, so the
+        // in-memory vector index also wasn't populated inside insertChunks.
+        XCTAssertEqual(ids.count, 3)
+        XCTAssertTrue(ids.allSatisfy { $0 > 0 })
 
-        // Verify rows landed in the DB. NOTE: insertChunks currently returns
-        // an empty id array because DocumentChunk conforms to PersistableRecord
-        // (immutable) rather than MutablePersistableRecord, so GRDB does not
-        // backfill the auto-assigned id. Tracked in TODO.md. We work around it
-        // by loading the index from disk before searching.
         let rowCount = try pool.read { db in
             try DocumentChunk.fetchCount(db)
         }
         XCTAssertEqual(rowCount, 3)
 
-        store.loadVectorIndex()
+        // Search uses the vector index that insertChunks now populates
+        // directly — no loadVectorIndex() round trip required.
         let results = store.search(queryEmbedding: [1, 0, 0], topK: 2, threshold: 0.0)
         XCTAssertGreaterThan(results.count, 0)
         XCTAssertEqual(results[0].chunk.content, "apples are red")
@@ -75,7 +76,6 @@ final class ChunkStoreTests: XCTestCase {
             ("b", [0, 1, 0], "{}"),
         ]
         store.insertChunks(chunks, sourceFile: "/tmp/del.txt")
-        store.loadVectorIndex()  // see TODO note in testInsertAndSemanticSearch
         XCTAssertEqual(store.totalChunkCount(), 2)
         store.removeFile("/tmp/del.txt")
         XCTAssertEqual(store.totalChunkCount(), 0)

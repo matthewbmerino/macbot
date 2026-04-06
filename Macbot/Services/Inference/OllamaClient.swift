@@ -115,7 +115,14 @@ final class OllamaClient: InferenceProvider, @unchecked Sendable {
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw OllamaError.httpError(0)
         }
-        return json["embeddings"] as? [[Float]] ?? []
+        // JSONSerialization decodes JSON numbers as NSNumber/Double — Swift's
+        // bridge does NOT coerce [[Double]] to [[Float]], so the older
+        // `as? [[Float]]` cast silently returned []. That broke the embedding
+        // router, semantic memory search, and RAG hybrid search in production
+        // (everything was running on keyword fallback paths). Decode as Double
+        // first, then convert.
+        let raw = json["embeddings"] as? [[Double]] ?? []
+        return raw.map { $0.map(Float.init) }
     }
 
     // MARK: - List Models

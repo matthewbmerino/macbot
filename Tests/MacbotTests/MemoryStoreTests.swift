@@ -24,11 +24,11 @@ final class MemoryStoreTests: XCTestCase {
     }
 
     func testSaveAndRecallByCategory() {
-        // NOTE: save() currently returns 0 because Memory conforms to
-        // PersistableRecord (immutable), so GRDB does not backfill the
-        // auto-assigned id after insert. The row is still persisted, just
-        // unaddressable by id from the call site. Tracked in TODO.md.
-        _ = store.save(category: "fact", content: "the sky is blue")
+        let id = store.save(category: "fact", content: "the sky is blue")
+        // Regression: prior to the MutablePersistableRecord fix, this returned
+        // 0 because GRDB never backfilled the auto-assigned id, which meant
+        // the embedding queue downstream did UPDATE WHERE id = 0 forever.
+        XCTAssertGreaterThan(id, 0)
         let recalled = store.recall(category: "fact")
         XCTAssertEqual(recalled.count, 1)
         XCTAssertEqual(recalled.first?.content, "the sky is blue")
@@ -47,16 +47,11 @@ final class MemoryStoreTests: XCTestCase {
         XCTAssertTrue(store.keywordSearch(query: "spaceship").isEmpty)
     }
 
-    func testForgetRemovesEntry() throws {
-        store.save(category: "note", content: "ephemeral")
+    func testForgetRemovesEntry() {
+        let id = store.save(category: "note", content: "ephemeral")
+        XCTAssertGreaterThan(id, 0)
         XCTAssertEqual(store.recall(category: "note").count, 1)
-        // save() returns 0 (see note in testSaveAndRecallByCategory), so we
-        // fetch the real id from the DB to call forget().
-        let realId = try pool.read { db in
-            try Memory.filter(Column("category") == "note").fetchOne(db)?.id
-        }
-        XCTAssertNotNil(realId)
-        XCTAssertTrue(store.forget(memoryId: realId!))
+        XCTAssertTrue(store.forget(memoryId: id))
         XCTAssertEqual(store.recall(category: "note").count, 0)
     }
 
