@@ -38,7 +38,11 @@ final class DatabaseManager {
         Log.app.info("Database ready at \(dbPath)")
     }
 
-    private var migrator: DatabaseMigrator {
+    private var migrator: DatabaseMigrator { Self.buildMigrator() }
+
+    /// Schema migrator. Static so tests can apply it to an in-memory pool
+    /// without triggering the singleton (which opens the real on-disk DB).
+    static func buildMigrator() -> DatabaseMigrator {
         var migrator = DatabaseMigrator()
 
         migrator.registerMigration("v1") { db in
@@ -194,5 +198,16 @@ final class DatabaseManager {
         }
 
         return migrator
+    }
+
+    /// Create a fresh database pool backed by a unique temp file, with all
+    /// migrations applied. For test use only — DatabasePool requires a real
+    /// file (it uses WAL), so we use a temp path instead of `:memory:`.
+    /// Caller is responsible for cleanup.
+    static func makeTestPool() throws -> (pool: DatabasePool, path: String) {
+        let path = NSTemporaryDirectory() + "macbot-test-\(UUID().uuidString).sqlite"
+        let pool = try DatabasePool(path: path)
+        try buildMigrator().migrate(pool)
+        return (pool, path)
     }
 }

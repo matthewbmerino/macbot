@@ -43,5 +43,13 @@ let package = Package(
                 .linkedFramework("MetalPerformanceShaders"),
             ]
         ),
+        .testTarget(
+            name: "MacbotTests",
+            dependencies: [
+                "Macbot",
+                .product(name: "GRDB", package: "GRDB.swift"),
+            ],
+            path: "Tests/MacbotTests"
+        ),
     ]
 )
