@@ -130,6 +130,22 @@ final class DatabaseManager {
             }
         }
 
+        // Episodic memory — auto-summarized conversation episodes
+        migrator.registerMigration("v6_episodes") { db in
+            try db.create(table: "episodes") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("title", .text).notNull()
+                t.column("summary", .text).notNull()
+                t.column("topics", .text).defaults(to: "[]")  // JSON array of strings
+                t.column("messageCount", .integer).defaults(to: 0)
+                t.column("startedAt", .datetime).notNull()
+                t.column("endedAt", .datetime).notNull()
+                t.column("embedding", .blob)
+                t.column("createdAt", .datetime).notNull()
+            }
+            try db.create(index: "idx_episodes_startedAt", on: "episodes", columns: ["startedAt"])
+        }
+
         return migrator
     }
 }

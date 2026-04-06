@@ -9,11 +9,11 @@ let package = Package(
         .package(url: "https://github.com/kishikawakatsumi/KeychainAccess", from: "4.2.2"),
         .package(url: "https://github.com/gonzalezreal/swift-markdown-ui", from: "2.4.0"),
         // MLX — Apple's machine learning framework for Apple Silicon
-        .package(url: "https://github.com/ml-explore/mlx-swift", .upToNextMinor(from: "0.30.3")),
+        .package(url: "https://github.com/ml-explore/mlx-swift", "0.29.1"..<"0.30.0"),
         // Tokenizers for HuggingFace models
-        .package(url: "https://github.com/huggingface/swift-transformers", .upToNextMinor(from: "1.1.0")),
+        .package(url: "https://github.com/huggingface/swift-transformers", "1.0.0"..<"1.1.0"),
         // MLX StableDiffusion — on-device image generation
-        .package(url: "https://github.com/ml-explore/mlx-swift-examples", .upToNextMinor(from: "1.0.0")),
+        .package(url: "https://github.com/ml-explore/mlx-swift-examples", from: "2.29.1"),
     ],
     targets: [
         .executableTarget(

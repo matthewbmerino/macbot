@@ -54,6 +54,21 @@ enum SkillTools {
         properties: [:]
     )
 
+    static let ambientContextSpec = ToolSpec(
+        name: "ambient_context",
+        description: "Get a snapshot of what the user is currently doing on their Mac: active app, idle time, battery, memory, recent clipboard. Use this when you need real-time context about the user's environment.",
+        properties: [:]
+    )
+
+    static let recallEpisodesSpec = ToolSpec(
+        name: "recall_episodes",
+        description: "Recall past conversation episodes (auto-summarized chat sessions). Use this when the user asks about previous conversations, what they discussed before, or 'last time we talked about X'. Returns matching episodes with their summaries.",
+        properties: [
+            "query": .init(type: "string", description: "Optional keyword/topic to search for. Leave empty to get most recent episodes."),
+            "limit": .init(type: "string", description: "Max episodes to return (default 5)"),
+        ]
+    )
+
     // MARK: - Registration
 
     static func register(on registry: ToolRegistry) async {
@@ -84,6 +99,56 @@ enum SkillTools {
         await registry.register(systemDashboardSpec) { _ in
             await systemDashboard()
         }
+        await registry.register(ambientContextSpec) { _ in
+            await ambientContext()
+        }
+        await registry.register(recallEpisodesSpec) { args in
+            recallEpisodes(
+                query: args["query"] as? String ?? "",
+                limit: Int(args["limit"] as? String ?? "5") ?? 5
+            )
+        }
+    }
+
+    // MARK: - Recall Episodes
+
+    static func recallEpisodes(query: String, limit: Int) -> String {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let episodes = q.isEmpty
+            ? EpisodicMemory.shared.recent(limit: limit)
+            : EpisodicMemory.shared.search(query: q, limit: limit)
+
+        if episodes.isEmpty {
+            return q.isEmpty ? "No past episodes recorded yet." : "No episodes found matching '\(q)'."
+        }
+        return EpisodicMemory.format(episodes)
+    }
+
+    // MARK: - Ambient Context
+
+    static func ambientContext() async -> String {
+        let s = await AmbientMonitor.shared.current()
+        var lines: [String] = ["Current ambient context:"]
+        if !s.frontmostApp.isEmpty {
+            lines.append("- Active app: \(s.frontmostApp)\(s.frontmostBundleID.isEmpty ? "" : " (\(s.frontmostBundleID))")")
+        }
+        if !s.windowTitle.isEmpty {
+            lines.append("- Window: \(s.windowTitle)")
+        }
+        lines.append("- Idle: \(s.idleSeconds)s")
+        if s.batteryPercent >= 0 {
+            lines.append("- Battery: \(s.batteryPercent)%\(s.isCharging ? " (charging)" : "")")
+        }
+        if s.memoryTotalGB > 0 {
+            lines.append("- Memory: \(String(format: "%.1f", s.memoryUsedGB)) / \(String(format: "%.0f", s.memoryTotalGB)) GB")
+        }
+        lines.append("- Network: \(s.networkOnline ? "online" : "offline")")
+        if !s.clipboardPreview.isEmpty {
+            lines.append("- Clipboard: \(s.clipboardPreview)")
+        }
+        let age = Int(Date().timeIntervalSince(s.capturedAt))
+        lines.append("- Captured: \(age)s ago")
+        return lines.joined(separator: "\n")
     }
 
     // MARK: - Weather (wttr.in)

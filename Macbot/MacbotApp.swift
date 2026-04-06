@@ -47,6 +47,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApplication.shared.setActivationPolicy(.regular)
         NSApplication.shared.activate(ignoringOtherApps: true)
         showMainWindow()
+
+        // Start ambient context loop — gives the assistant continuous awareness
+        // of active app, idle time, battery, etc.
+        Task { await AmbientMonitor.shared.start() }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

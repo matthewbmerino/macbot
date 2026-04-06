@@ -181,6 +181,8 @@ final class ChatViewModel {
             let tokens = TokenEstimator.estimate(responseText)
             let tps = elapsed > 0 ? Double(tokens) / elapsed : 0
 
+            let modelName: String? = agentCategory.map { self.orchestrator.modelName(for: $0) }
+
             await MainActor.run { [self] in
                 if self.messages.last?.role != .assistant {
                     let fallback = responseText.isEmpty
@@ -190,11 +192,13 @@ final class ChatViewModel {
                     msg.responseTime = elapsed
                     msg.tokenCount = tokens
                     msg.tokensPerSecond = tps
+                    msg.modelName = modelName
                     self.messages.append(msg)
                 } else {
                     self.messages[self.messages.count - 1].responseTime = elapsed
                     self.messages[self.messages.count - 1].tokenCount = tokens
                     self.messages[self.messages.count - 1].tokensPerSecond = tps
+                    self.messages[self.messages.count - 1].modelName = modelName
                 }
                 self.isStreaming = false
                 self.currentStatus = nil

@@ -20,6 +20,7 @@ struct ChatMessage: Identifiable {
     var responseTime: TimeInterval?  // Total time from send to complete
     var tokenCount: Int?             // Estimated tokens in response
     var tokensPerSecond: Double?     // Generation speed
+    var modelName: String?           // The actual model that produced this response
 
     init(
         role: MessageRole,
@@ -60,6 +61,11 @@ struct ChatMessage: Identifiable {
         // Speed
         if let tps = tokensPerSecond, tps > 0 {
             parts.append(String(format: "%.0f tok/s", tps))
+        }
+
+        // Model
+        if let model = modelName, !model.isEmpty {
+            parts.append(model)
         }
 
         return parts.joined(separator: " · ")

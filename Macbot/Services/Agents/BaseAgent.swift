@@ -272,12 +272,25 @@ class BaseAgent {
         }
     }
 
+    // MARK: - Ambient context injection
+
+    /// Injects a transient system message describing the user's current environment
+    /// (active app, idle, battery, etc) before the next user turn. Lets the model
+    /// reason about context without the user having to spell it out.
+    func injectAmbientContext() async {
+        let line = await AmbientMonitor.shared.promptLine()
+        guard !line.isEmpty else { return }
+        appendToHistory(["role": "system", "content": line])
+    }
+
     // MARK: - Run (non-streaming)
 
     func run(_ input: String, images: [Data]? = nil, plan: Bool = false) async throws -> String {
         if history.isEmpty {
             appendToHistory(["role": "system", "content": systemPrompt])
         }
+
+        await injectAmbientContext()
 
         var msg: [String: Any] = ["role": "user", "content": input]
         if let images {
@@ -410,6 +423,8 @@ class BaseAgent {
                     if history.isEmpty {
                         appendToHistory(["role": "system", "content": systemPrompt])
                     }
+
+                    await injectAmbientContext()
 
                     var msg: [String: Any] = ["role": "user", "content": input]
                     if let images {

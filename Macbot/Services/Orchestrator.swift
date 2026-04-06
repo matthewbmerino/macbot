@@ -10,6 +10,17 @@ final class Orchestrator {
     let chunkStore: ChunkStore
     let compositeToolStore: CompositeToolStore
     var modelConfig: ModelConfig
+
+    /// Returns the resolved model name for an agent category.
+    func modelName(for category: AgentCategory) -> String {
+        switch category {
+        case .general: return modelConfig.general
+        case .coder:   return modelConfig.coder
+        case .vision:  return modelConfig.vision
+        case .reasoner: return modelConfig.reasoner
+        case .rag:     return modelConfig.general
+        }
+    }
     var soulPrompt: String
 
     /// Ollama handles all inference. Its llama.cpp Metal backend is faster
@@ -75,6 +86,7 @@ final class Orchestrator {
         var consecutiveSameAgent: Int
         var lastMessageTime: Date
         var messageCount: Int = 0
+        var sessionStartedAt: Date
 
         init(agents: [AgentCategory: BaseAgent]) {
             self.agents = agents
@@ -82,6 +94,7 @@ final class Orchestrator {
             self.lastActive = Date()
             self.consecutiveSameAgent = 0
             self.lastMessageTime = .distantPast
+            self.sessionStartedAt = Date()
         }
     }
 

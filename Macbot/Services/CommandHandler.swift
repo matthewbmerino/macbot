@@ -13,8 +13,33 @@ enum CommandHandler {
         let rest = parts.count > 1 ? String(parts[1]) : ""
 
         switch cmd {
+        case "/upgrade", "/big":
+            // Re-run the most recent user message through the reasoner (largest model)
+            // for a more thorough answer.
+            guard let reasoner = conv.agents[.reasoner] else {
+                return "Reasoner agent unavailable."
+            }
+            // Find last user message in any agent's history
+            var lastUser: String?
+            for (_, agent) in conv.agents {
+                for msg in agent.history.reversed() {
+                    if let role = msg["role"] as? String, role == "user",
+                       let content = msg["content"] as? String, !content.isEmpty {
+                        lastUser = content
+                        break
+                    }
+                }
+                if lastUser != nil { break }
+            }
+            guard let prompt = lastUser else { return "No prior user message to upgrade." }
+            conv.currentAgent = .reasoner
+            return try await reasoner.run(prompt)
+
         case "/clear":
+            // Auto-record episode from the most active agent before clearing
+            await recordEpisodeFromConversation(conv: conv, orchestrator: orchestrator)
             for (_, agent) in conv.agents { agent.clearHistory() }
+            conv.sessionStartedAt = Date()
             return "Conversation cleared."
 
         case "/status":
@@ -151,6 +176,38 @@ enum CommandHandler {
 
         let id = orchestrator.compositeToolStore.save(name: name, description: desc, steps: [], triggerPhrase: trigger)
         return "Created workflow '\(name)' (id=\(id)). Trigger: \"\(trigger)\""
+    }
+
+    /// Pulls history from the most-active agent and asks the router model
+    /// to summarize it into an Episode. Fire-and-forget — never blocks /clear.
+    private static func recordEpisodeFromConversation(
+        conv: Orchestrator.ConversationState,
+        orchestrator: Orchestrator
+    ) async {
+        // Pick the agent with the longest history (most active)
+        var bestAgent: BaseAgent?
+        var bestCount = 0
+        for (_, agent) in conv.agents where agent.history.count > bestCount {
+            bestAgent = agent
+            bestCount = agent.history.count
+        }
+        guard let agent = bestAgent, bestCount > 2 else { return }
+
+        let messages = agent.history
+        let started = conv.sessionStartedAt
+        let ended = Date()
+        let client = orchestrator.client
+        let model = orchestrator.modelConfig.router  // tiny model for cheap summary
+
+        Task.detached {
+            await EpisodicMemory.shared.recordEpisode(
+                messages: messages,
+                startedAt: started,
+                endedAt: ended,
+                client: client,
+                model: model
+            )
+        }
     }
 
     private static let helpText = """

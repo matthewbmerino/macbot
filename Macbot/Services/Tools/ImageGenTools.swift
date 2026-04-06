@@ -96,10 +96,11 @@ enum ImageGenTools {
                     xt = latent
                 }
                 return (xt!, generator.detachedDecoder())
-            } second: { (xt, decoder) in
+            } second: { (pair: (MLXArray, ImageDecoder)) in
+                let (xt, decoder) = pair
                 let decoded = decoder(xt)
                 eval(decoded)
-                return StableDiffusion.Image(decoded)
+                return Image(decoded)
             }
 
             // Save to file
