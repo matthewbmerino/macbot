@@ -130,6 +130,25 @@ final class DatabaseManager {
             }
         }
 
+        // Skill acquisition — distilled (situation, action, lesson) tuples
+        // extracted from successful interactions. Retrieved by embedding
+        // similarity and injected into future agent prompts.
+        migrator.registerMigration("v8_skills") { db in
+            try db.create(table: "skills") { t in
+                t.autoIncrementedPrimaryKey("id")
+                t.column("situation", .text).notNull()
+                t.column("action", .text).notNull()
+                t.column("lesson", .text).notNull()
+                t.column("embedding", .blob)
+                t.column("sourceTraceId", .integer)
+                t.column("useCount", .integer).defaults(to: 0)
+                t.column("successCount", .integer).defaults(to: 0)
+                t.column("createdAt", .datetime).notNull()
+                t.column("updatedAt", .datetime).notNull()
+            }
+            try db.create(index: "idx_skills_useCount", on: "skills", columns: ["useCount"])
+        }
+
         // Trace layer — structured log of every user→assistant turn.
         // Foundation for: replay, eval harness, learned routing, skill
         // distillation, regression detection, on-device personalization.

@@ -11,6 +11,80 @@ final class Orchestrator {
     let compositeToolStore: CompositeToolStore
     var modelConfig: ModelConfig
 
+    /// Retrieve top-K learned skills relevant to the new message and inject
+    /// them as a transient system message. The agent sees these *as if* it
+    /// always knew them, which compounds across sessions.
+    func injectLearnedSkills(agent: BaseAgent, message: String) async {
+        let skills = await SkillStore.shared.retrieve(
+            forQuery: message,
+            client: client,
+            embeddingModel: modelConfig.embedding,
+            topK: 5
+        )
+        let block = SkillStore.formatForPrompt(skills)
+        guard !block.isEmpty else { return }
+        agent.history.append(["role": "system", "content": block])
+    }
+
+    /// Run the learned router and apply its predictions: tool hints get
+    /// merged into the agent's recency-bias slot. Agent override is logged
+    /// but NOT applied yet — we keep the keyword router as ground truth
+    /// until the eval harness shows learned routing wins.
+    func applyLearnedRouting(agent: BaseAgent, message: String) async -> LearnedPrediction? {
+        guard let prediction = await LearnedRouter.predict(
+            query: message,
+            client: client,
+            embeddingModel: modelConfig.embedding,
+            topK: 8,
+            minSimilarity: 0.55
+        ) else {
+            agent.learnedToolHints = []
+            return nil
+        }
+        agent.learnedToolHints = prediction.tools
+        if !prediction.tools.isEmpty {
+            ActivityLog.shared.log(.routing, "Learned hints: \(prediction.tools.joined(separator: ",")) (\(prediction.neighborCount) neighbors, sim=\(String(format: "%.2f", prediction.topSimilarity)))")
+        }
+        return prediction
+    }
+
+    /// Fire-and-forget skill distillation. Runs on a detached task with the
+    /// router model so it never blocks the chat path.
+    func scheduleSkillDistillation(trace: TraceBuilder) {
+        // Snapshot the trace data we need — the builder is mutable
+        let snapshotTrace = InteractionTrace(
+            id: nil,
+            sessionId: trace.sessionId,
+            userId: trace.userId,
+            turnIndex: trace.turnIndex,
+            userMessage: trace.userMessage,
+            userMessageEmbedding: nil,
+            routedAgent: trace.routedAgent,
+            routeReason: trace.routeReason,
+            modelUsed: trace.modelUsed,
+            toolCalls: (try? JSONSerialization.data(withJSONObject: trace.toolCalls))
+                .flatMap { String(data: $0, encoding: .utf8) } ?? "[]",
+            assistantResponse: trace.assistantResponse,
+            responseTokens: trace.responseTokens,
+            latencyMs: 0,
+            error: trace.error,
+            ambientSnapshot: "{}",
+            metadata: "{}",
+            createdAt: Date()
+        )
+        let client = self.client
+        let routerModel = self.modelConfig.router
+        let embModel = self.modelConfig.embedding
+        Task.detached {
+            await SkillStore.shared.distill(
+                from: snapshotTrace,
+                client: client,
+                model: routerModel,
+                embeddingModel: embModel
+            )
+        }
+    }
+
     /// Stable session identifier for trace correlation. Reset on /clear via
     /// ConversationState.sessionStartedAt.
     func sessionId(for conv: ConversationState, userId: String) -> String {
@@ -232,6 +306,9 @@ final class Orchestrator {
 
         conv.messageCount += 1
         injectPromptModules(agent: agent, conv: conv, isPlanning: plan, message: message)
+        await injectLearnedSkills(agent: agent, message: message)
+        let learnedPrediction = await applyLearnedRouting(agent: agent, message: message)
+        _ = learnedPrediction  // logged for now; future: feed into route decision
 
         // Trace begin
         let trace = TraceBuilder(
@@ -250,6 +327,7 @@ final class Orchestrator {
             trace.assistantResponse = response
             extractToolCalls(from: agent, since: historyBeforeCount, into: trace)
             TraceStore.shared.commit(trace)
+            scheduleSkillDistillation(trace: trace)
             return response
         } catch {
             trace.error = "\(error)"
@@ -306,6 +384,7 @@ final class Orchestrator {
 
                     conv.messageCount += 1
                     injectPromptModules(agent: agent, conv: conv, isPlanning: plan, message: message)
+                    await injectLearnedSkills(agent: agent, message: message)
 
                     // Trace begin
                     let trace = TraceBuilder(
@@ -335,6 +414,7 @@ final class Orchestrator {
                     trace.assistantResponse = streamedText
                     extractToolCalls(from: agent, since: historyBeforeCount, into: trace)
                     TraceStore.shared.commit(trace)
+                    scheduleSkillDistillation(trace: trace)
 
                     continuation.finish()
                 } catch {

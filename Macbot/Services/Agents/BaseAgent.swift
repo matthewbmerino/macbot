@@ -19,6 +19,12 @@ class BaseAgent {
     var lastToolUsed: String = ""
     var lastToolFailed: Bool = false
 
+    // Learned tool hints from k-NN over the trace store. Set by Orchestrator
+    // before each turn — gets merged into the tool filter as if it were
+    // recency bias. Lets the learned router promote tools without overriding
+    // the keyword router until eval shows it wins.
+    var learnedToolHints: [String] = []
+
     // ReAct reflection — evaluate tool results before responding
     var reflectionEnabled: Bool = true
     private let reflectionThreshold = 5  // Reflect after this many tool calls
@@ -301,7 +307,7 @@ class BaseAgent {
         if plan { _ = await generatePlan(input) }
 
         // Pre-filter tools based on message content
-        var recentTools: [String] = []
+        var recentTools: [String] = learnedToolHints
         var tools = await toolRegistry.filteredSpecsAsJSON(for: input, recentTools: recentTools)
         var toolCallCount = 0
 
@@ -445,7 +451,7 @@ class BaseAgent {
                         }
                     }
 
-                    var recentTools: [String] = []
+                    var recentTools: [String] = learnedToolHints
                     var tools = await toolRegistry.filteredSpecsAsJSON(for: input, recentTools: recentTools)
                     var stepCount = 0
                     var totalToolCalls = 0

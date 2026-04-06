@@ -13,6 +13,16 @@ enum CommandHandler {
         let rest = parts.count > 1 ? String(parts[1]) : ""
 
         switch cmd {
+        case "/skills":
+            let n = Int(rest.trimmingCharacters(in: .whitespaces)) ?? 20
+            let skills = SkillStore.shared.recentSkills(limit: n)
+            let total = SkillStore.shared.count()
+            if skills.isEmpty { return "No skills learned yet. Have a few real conversations and try again." }
+            let lines = skills.enumerated().map { (i, s) -> String in
+                "\(i + 1). [\(s.useCount)x] \(s.promptLine)"
+            }
+            return "Learned skills (\(skills.count) of \(total) total):\n\n\(lines.joined(separator: "\n"))"
+
         case "/eval":
             // Run the held-out eval set against the live orchestrator.
             // Use sparingly — touches every model, takes a minute or two.
