@@ -140,6 +140,19 @@ class BaseAgent {
         tokenCount = 0
     }
 
+    /// Replace this agent's history with `[systemPrompt] + transcript` so the
+    /// agent sees the full canonical conversation regardless of which agent
+    /// answered prior turns. Called by Orchestrator at the start of every turn
+    /// to keep context coherent across routing changes.
+    ///
+    /// The Orchestrator owns the conversation transcript; agents are stateless
+    /// borrowers from one turn to the next.
+    func loadHistoryFromTranscript(_ transcript: [[String: Any]]) {
+        history = [["role": "system", "content": systemPrompt]]
+        history.append(contentsOf: transcript)
+        tokenCount = TokenEstimator.estimate(messages: history)
+    }
+
     func registerTool(_ spec: ToolSpec, handler: @escaping ToolHandler) {
         Task { await toolRegistry.register(spec, handler: handler) }
     }

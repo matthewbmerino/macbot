@@ -78,26 +78,24 @@ enum CommandHandler {
             guard let reasoner = conv.agents[.reasoner] else {
                 return "Reasoner agent unavailable."
             }
-            // Find last user message in any agent's history
+            // Find the last user message in the canonical transcript
             var lastUser: String?
-            for (_, agent) in conv.agents {
-                for msg in agent.history.reversed() {
-                    if let role = msg["role"] as? String, role == "user",
-                       let content = msg["content"] as? String, !content.isEmpty {
-                        lastUser = content
-                        break
-                    }
+            for msg in conv.transcript.reversed() {
+                if let role = msg["role"] as? String, role == "user",
+                   let content = msg["content"] as? String, !content.isEmpty {
+                    lastUser = content
+                    break
                 }
-                if lastUser != nil { break }
             }
             guard let prompt = lastUser else { return "No prior user message to upgrade." }
             conv.currentAgent = .reasoner
-            return try await reasoner.run(prompt)
+            return try await runOnAgent(reasoner, conv: conv, orchestrator: orchestrator, input: prompt)
 
         case "/clear":
             // Auto-record episode from the most active agent before clearing
             await recordEpisodeFromConversation(conv: conv, orchestrator: orchestrator)
             for (_, agent) in conv.agents { agent.clearHistory() }
+            conv.transcript.removeAll()  // canonical history reset too
             conv.sessionStartedAt = Date()
             return "Conversation cleared."
 
@@ -107,32 +105,32 @@ enum CommandHandler {
         case "/code", "/coder":
             conv.currentAgent = .coder
             guard !rest.isEmpty, let agent = conv.agents[.coder] else { return "Switched to coder." }
-            return try await agent.run(rest)
+            return try await runOnAgent(agent, conv: conv, orchestrator: orchestrator, input: rest)
 
         case "/think", "/reason":
             conv.currentAgent = .reasoner
             guard !rest.isEmpty, let agent = conv.agents[.reasoner] else { return "Switched to reasoner." }
-            return try await agent.run(rest)
+            return try await runOnAgent(agent, conv: conv, orchestrator: orchestrator, input: rest)
 
         case "/see", "/vision":
             conv.currentAgent = .vision
             guard !rest.isEmpty, let agent = conv.agents[.vision] else { return "Switched to vision." }
-            return try await agent.run(rest)
+            return try await runOnAgent(agent, conv: conv, orchestrator: orchestrator, input: rest)
 
         case "/chat":
             conv.currentAgent = .general
             guard !rest.isEmpty, let agent = conv.agents[.general] else { return "Switched to general." }
-            return try await agent.run(rest)
+            return try await runOnAgent(agent, conv: conv, orchestrator: orchestrator, input: rest)
 
         case "/knowledge", "/rag":
             conv.currentAgent = .rag
             guard !rest.isEmpty, let agent = conv.agents[.rag] else { return "Switched to knowledge agent." }
-            return try await agent.run(rest)
+            return try await runOnAgent(agent, conv: conv, orchestrator: orchestrator, input: rest)
 
         case "/plan":
             guard !rest.isEmpty else { return "Usage: /plan <task description>" }
             let agent = conv.agents[conv.currentAgent] ?? conv.agents[.general]!
-            return try await agent.run(rest, plan: true)
+            return try await runOnAgent(agent, conv: conv, orchestrator: orchestrator, input: rest, plan: true)
 
         case "/remember":
             guard !rest.isEmpty else { return "Usage: /remember <text>" }
@@ -173,6 +171,25 @@ enum CommandHandler {
         default:
             return "Unknown command: \(cmd). Type /help for commands."
         }
+    }
+
+    // MARK: - Helpers
+
+    /// Run an agent with the canonical conversation transcript hydrated and
+    /// the new turn captured back. Mirrors what handleMessage does for
+    /// route-based turns so command-driven turns (/code, /think, /chat, ...)
+    /// also benefit from cross-agent context preservation.
+    private static func runOnAgent(
+        _ agent: BaseAgent,
+        conv: Orchestrator.ConversationState,
+        orchestrator: Orchestrator,
+        input: String,
+        plan: Bool = false
+    ) async throws -> String {
+        let startCount = orchestrator.prepareAgent(agent, conv: conv)
+        let response = try await agent.run(input, plan: plan)
+        orchestrator.captureTurn(from: agent, into: conv, since: startCount)
+        return response
     }
 
     // MARK: - Subcommands

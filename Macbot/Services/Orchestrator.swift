@@ -197,6 +197,18 @@ final class Orchestrator {
         var messageCount: Int = 0
         var sessionStartedAt: Date
 
+        /// Canonical, agent-agnostic conversation transcript. Stores only
+        /// user/assistant/tool messages — never system messages, which are
+        /// per-agent and transient. Each turn the chosen agent's history is
+        /// rehydrated as `[systemPrompt] + transcript`, then any new
+        /// user-visible messages added during the turn are captured back.
+        ///
+        /// This is the fix for context loss across routing changes: with the
+        /// embedding router classifying correctly (post-Phase B), turns can
+        /// land on different agents, and without a shared transcript each
+        /// agent's per-instance history was a tiny island.
+        var transcript: [[String: Any]] = []
+
         init(agents: [AgentCategory: BaseAgent]) {
             self.agents = agents
             self.currentAgent = .general
@@ -204,6 +216,31 @@ final class Orchestrator {
             self.consecutiveSameAgent = 0
             self.lastMessageTime = .distantPast
             self.sessionStartedAt = Date()
+        }
+    }
+
+    /// Hydrate the chosen agent with the conversation's canonical transcript
+    /// so it sees every prior turn regardless of which agent originally
+    /// answered. Returns the history index at which the turn's new messages
+    /// will start — pass it to `captureTurn(...)` afterwards.
+    func prepareAgent(_ agent: BaseAgent, conv: ConversationState) -> Int {
+        agent.loadHistoryFromTranscript(conv.transcript)
+        return agent.history.count
+    }
+
+    /// After an agent finishes a turn, append the user-visible messages it
+    /// added (user / assistant / tool — never transient system injections)
+    /// to the conversation's canonical transcript so the next turn's agent
+    /// can see them.
+    func captureTurn(from agent: BaseAgent, into conv: ConversationState, since startCount: Int) {
+        guard agent.history.count > startCount else { return }
+        for msg in agent.history[startCount...] {
+            guard let role = msg["role"] as? String else { continue }
+            // Skip transient system messages (ambient context, learned skills,
+            // prompt modules, ReAct nudges, etc.) — they belong to the agent
+            // that emitted them, not the canonical transcript.
+            if role == "system" { continue }
+            conv.transcript.append(msg)
         }
     }
 
@@ -320,18 +357,20 @@ final class Orchestrator {
         trace.routedAgent = category.rawValue
         trace.modelUsed = modelName(for: category)
         trace.ambientSnapshot = await AmbientMonitor.shared.current()
-        let historyBeforeCount = agent.history.count
+        let historyBeforeCount = prepareAgent(agent, conv: conv)
 
         do {
             let response = try await agent.run(message, images: images, plan: plan)
             trace.assistantResponse = response
             extractToolCalls(from: agent, since: historyBeforeCount, into: trace)
+            captureTurn(from: agent, into: conv, since: historyBeforeCount)
             TraceStore.shared.commit(trace)
             scheduleSkillDistillation(trace: trace)
             return response
         } catch {
             trace.error = "\(error)"
             extractToolCalls(from: agent, since: historyBeforeCount, into: trace)
+            captureTurn(from: agent, into: conv, since: historyBeforeCount)
             TraceStore.shared.commit(trace)
             throw error
         }
@@ -396,7 +435,7 @@ final class Orchestrator {
                     trace.routedAgent = category.rawValue
                     trace.modelUsed = modelName(for: category)
                     trace.ambientSnapshot = await AmbientMonitor.shared.current()
-                    let historyBeforeCount = agent.history.count
+                    let historyBeforeCount = self.prepareAgent(agent, conv: conv)
 
                     var streamedText = ""
                     for try await event in agent.runStream(message, images: images, plan: plan) {
@@ -413,6 +452,7 @@ final class Orchestrator {
                     // Trace commit
                     trace.assistantResponse = streamedText
                     extractToolCalls(from: agent, since: historyBeforeCount, into: trace)
+                    self.captureTurn(from: agent, into: conv, since: historyBeforeCount)
                     TraceStore.shared.commit(trace)
                     scheduleSkillDistillation(trace: trace)
 
@@ -596,15 +636,14 @@ final class Orchestrator {
     // MARK: - System Prompt
 
     private func buildSystemPrompt(agent: BaseAgent, userId: String) -> String {
-        // Current date/time so the model always knows "today"
+        // Date is baked into the prompt at agent creation. Time is NOT baked
+        // in — system prompts are static and would drift, so the model would
+        // confidently report a stale start-time hours into a session. For
+        // time-of-day questions, the model must call the `current_time` tool.
         let now = Date()
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "EEEE, MMMM d, yyyy"
-        let timeFormatter = DateFormatter()
-        timeFormatter.dateFormat = "h:mm a"
-        let timeZone = TimeZone.current.identifier
-
-        let context = "Current date: \(dateFormatter.string(from: now)). Current time: \(timeFormatter.string(from: now)) (\(timeZone))."
+        let context = "Today's date: \(dateFormatter.string(from: now)). For the current time of day, call the current_time tool — never guess or read it from this prompt."
 
         var parts = [soulPrompt, context, agent.systemPrompt]
 
