@@ -4,9 +4,64 @@
 
 Native macOS AI agent — privacy-first, all processing on-device.
 
+> 📷 **Screenshots:** drop `Assets/chat.png` and `Assets/menubar.png` into the
+> repo and they'll render here. The slots are reserved below.
+>
+> ![Chat view](Assets/chat.png)
+> ![Menu bar widget](Assets/menubar.png)
+
 Built with SwiftUI. Runs models locally via Ollama (llama.cpp Metal backend) for maximum performance. Multi-agent orchestration, semantic memory, RAG pipeline, and deep system introspection.
 
+## Quick Start
+
+```bash
+brew install ollama
+ollama serve &
+ollama pull qwen3.5:9b
+ollama pull qwen3-embedding:0.6b
+ollama pull gemma4:e4b   # vision; optional
+
+git clone https://github.com/matthewbmerino/macbot-swift
+cd macbot-swift
+swift build
+swift run Macbot
+```
+
+First launch walks you through model selection and grants the macOS
+permissions Macbot needs (Accessibility, Screen Recording for OCR, Calendar
+and Contacts for those tools). Everything runs locally — nothing leaves the
+machine.
+
+## Configuration
+
+Macbot ships with defaults tuned for an **M3 Pro 18GB**: a single shared 9B
+model for general/coder/reasoner/RAG (specialization via system prompts), a
+small multimodal vision model, and a tiny router + embedding model that stay
+warm. Resting footprint ~1.6 GB, active ~8 GB.
+
+If you're on different hardware, swap the assignments via the in-app
+Onboarding/Settings flow (which writes `ModelConfig` to UserDefaults). Rough
+guidance:
+
+| RAM | Suggested general model | Suggested vision | Notes |
+|---|---|---|---|
+| 16 GB | `qwen3.5:7b` | `gemma4:e4b` | Drop `num_ctx` to 8k to stay clear of swap. |
+| 18 GB (M3 Pro) | `qwen3.5:9b` *(default)* | `gemma4:e4b` | Default config. |
+| 32 GB | `qwen3.5:14b` or `gemma4:12b` | `gemma4:12b` | Comfortable headroom; can hold two warm models. |
+| 64 GB+ | `gemma4:26b` (MoE, 4B active) | `gemma4:26b` | 256k ctx, multimodal, runs fast for an MoE. |
+
+`ModelConfig` includes a one-time migration that rewrites known oversized
+choices from earlier versions of the project (`deepseek-r1:14b`,
+`qwen2.5:32b`, `qwen3-vl:8b`) to the current 18 GB defaults so an upgrade
+doesn't surprise you.
+
+`keep_alive` is set to `5m` so models actually unload between sessions —
+holding multiple 9B models warm on 18 GB causes swap thrashing.
+
 ## Architecture
+
+<details>
+<summary>ASCII diagram</summary>
 
 ```
    ┌────────────────────┐         ┌──────────────────────┐
@@ -72,6 +127,8 @@ Built with SwiftUI. Runs models locally via Ollama (llama.cpp Metal backend) for
               │   3.2s · 156 tok · 49/s · model  │
               └──────────────────────────────────┘
 ```
+
+</details>
 
 ## Models
 
@@ -186,9 +243,13 @@ oversized choices on first launch. If you upgrade to a 32GB+ Mac, swap in
 - Apple Silicon or Intel
 - [Ollama](https://ollama.com) installed and running
 
-## Build
+## Build & test
 
 ```bash
 swift build
+swift test
 swift run Macbot
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development setup,
+test guidelines, and PR expectations.
