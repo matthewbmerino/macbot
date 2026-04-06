@@ -1,6 +1,61 @@
 import Foundation
+import AppKit
+import CoreGraphics
+import ScreenCaptureKit
+import Vision
 
 enum ScreenTools {
+
+    // MARK: - Native Swift capture (no subprocess, no Python)
+
+    /// Captures the main display via ScreenCaptureKit. Permission attributes
+    /// to Macbot.app reliably (unlike shelling out to /usr/sbin/screencapture
+    /// which can confuse TCC, especially across Xcode rebuilds).
+    static func captureMainDisplay(to path: String) async -> Bool {
+        do {
+            let content = try await SCShareableContent.excludingDesktopWindows(
+                false, onScreenWindowsOnly: true
+            )
+            guard let display = content.displays.first else { return false }
+            let filter = SCContentFilter(display: display, excludingWindows: [])
+            let config = SCStreamConfiguration()
+            config.width = display.width * 2     // Retina
+            config.height = display.height * 2
+            let cgImage = try await SCScreenshotManager.captureImage(
+                contentFilter: filter, configuration: config
+            )
+            let bitmap = NSBitmapImageRep(cgImage: cgImage)
+            guard let data = bitmap.representation(using: .png, properties: [:]) else {
+                return false
+            }
+            try data.write(to: URL(fileURLWithPath: path))
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// Native Swift OCR via Vision. Much faster than the Python/PyObjC fallback.
+    static func nativeOCR(imagePath: String) -> String {
+        guard let image = NSImage(contentsOfFile: imagePath),
+              let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        else { return "" }
+
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = true
+
+        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+        do {
+            try handler.perform([request])
+            let observations = request.results ?? []
+            return observations.compactMap { $0.topCandidates(1).first?.string }
+                .joined(separator: "\n")
+        } catch {
+            return ""
+        }
+    }
+
 
     static let screenOCRSpec = ToolSpec(
         name: "screen_ocr",
@@ -30,41 +85,30 @@ enum ScreenTools {
     static func screenOCR(app: String?) async -> String {
         let screenshotPath = "/tmp/macbot_ocr_\(UUID().uuidString.prefix(8)).png"
 
-        // Capture screenshot
-        if let appName = app?.trimmingCharacters(in: .whitespaces), !appName.isEmpty {
-            // Get window ID for the app and capture just that window
-            let script = """
-            tell application "System Events"
-                set frontApp to first application process whose name is "\(appName)"
-                set appWindow to first window of frontApp
-                set {x, y} to position of appWindow
-                set {w, h} to size of appWindow
-                return (x as text) & "," & (y as text) & "," & (w as text) & "," & (h as text)
-            end tell
+        // Native CoreGraphics capture — TCC permission attributes to Macbot.app
+        // reliably (unlike shelling out to /usr/sbin/screencapture which can
+        // confuse permission inheritance, especially across Xcode rebuilds).
+        let ok = await captureMainDisplay(to: screenshotPath)
+
+        guard ok, FileManager.default.fileExists(atPath: screenshotPath) else {
+            // Distinguish between permission denial and other failures
+            return """
+            Error: could not capture screen. Most likely cause: Screen Recording \
+            permission is missing or stale. Open System Settings → Privacy & \
+            Security → Screen & System Audio Recording, find Macbot (or Xcode if \
+            you're running from Xcode), toggle it OFF then ON, and quit/relaunch \
+            the app. Rebuilds in Xcode can invalidate the existing TCC entry.
             """
-            let bounds = await runAppleScript(script)
-            if !bounds.isEmpty && bounds.contains(",") {
-                _ = await shell("screencapture -x -R\(bounds) '\(screenshotPath)'")
-            } else {
-                // Fallback to full screen
-                _ = await shell("screencapture -x '\(screenshotPath)'")
-            }
-        } else {
-            _ = await shell("screencapture -x '\(screenshotPath)'")
         }
 
-        guard FileManager.default.fileExists(atPath: screenshotPath) else {
-            return "Error: screenshot failed — grant Screen Recording permission in System Settings > Privacy & Security"
-        }
-
-        // Run OCR via macOS Vision framework (Python + PyObjC)
-        let ocrText = await runVisionOCR(imagePath: screenshotPath)
+        // Native Swift Vision OCR — no Python, no subprocess
+        let ocrText = nativeOCR(imagePath: screenshotPath)
 
         var result = ""
         if !ocrText.isEmpty {
             result += "Extracted text:\n\(ocrText)\n\n"
         } else {
-            result += "OCR could not extract text (image may not contain readable text, or PyObjC is not installed).\n\n"
+            result += "OCR found no readable text on screen.\n\n"
         }
         result += "[IMAGE:\(screenshotPath)]"
 
