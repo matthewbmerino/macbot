@@ -21,6 +21,8 @@ final class StockSnapshotTests: XCTestCase {
         name: String = "Amazon.com, Inc.",
         price: Double,
         closes: [Double],
+        opens: [Double]? = nil,
+        regularMarketOpen: Double? = nil,
         dayLow: Double? = nil,
         dayHigh: Double? = nil,
         chartPreviousClose: Double? = nil,
@@ -31,20 +33,22 @@ final class StockSnapshotTests: XCTestCase {
             "shortName": name,
             "regularMarketPrice": price,
         ]
+        if let regularMarketOpen { meta["regularMarketOpen"] = regularMarketOpen }
         if let chartPreviousClose { meta["chartPreviousClose"] = chartPreviousClose }
         if let previousClose { meta["previousClose"] = previousClose }
         if let dayLow { meta["regularMarketDayLow"] = dayLow }
         if let dayHigh { meta["regularMarketDayHigh"] = dayHigh }
 
-        let closesArr: [Any] = closes.map { $0 as Any }
+        var quote: [String: Any] = [
+            "close": closes.map { $0 as Any },
+        ]
+        if let opens { quote["open"] = opens.map { $0 as Any } }
         return [
             "chart": [
                 "result": [[
                     "meta": meta,
                     "indicators": [
-                        "quote": [[
-                            "close": closesArr,
-                        ]],
+                        "quote": [quote],
                     ],
                 ]],
             ],
@@ -152,5 +156,123 @@ final class StockSnapshotTests: XCTestCase {
     func testReturnsNilForZeroPrice() {
         let json = makeJSON(price: 0, closes: [100, 0])
         XCTAssertNil(FinanceTools.parseStockSnapshot(json: json, symbol: "X"))
+    }
+
+    // MARK: - Intraday + day range (the "essentially flat" bug)
+
+    func testIntradayChangeFromMetaOpen() throws {
+        // The model previously called a $10 day range "essentially flat".
+        // The fix gives the formatter an explicit intraday change number
+        // computed from today's open. Verify the snapshot exposes it.
+        let json = makeJSON(
+            price: 233.65,
+            closes: [233.65, 233.65],   // prevClose unreliable
+            regularMarketOpen: 228.40,
+            dayLow: 223.27,
+            dayHigh: 233.80
+        )
+        let snap = try XCTUnwrap(FinanceTools.parseStockSnapshot(json: json, symbol: "AMZN"))
+        XCTAssertEqual(snap.dayOpen, 228.40, accuracy: 0.001)
+        XCTAssertEqual(snap.intradayChange, 5.25, accuracy: 0.001)
+        XCTAssertEqual(snap.intradayChangePct, 2.298, accuracy: 0.01)
+    }
+
+    func testIntradayFallsBackToOpensArrayWhenMetaMissing() throws {
+        // Some Yahoo responses don't carry regularMarketOpen in meta but
+        // do carry the indicators.quote.open array. Use the last entry.
+        let json = makeJSON(
+            price: 100.00,
+            closes: [95.0, 100.0],
+            opens: [94.0, 96.0]
+        )
+        let snap = try XCTUnwrap(FinanceTools.parseStockSnapshot(json: json, symbol: "TEST"))
+        XCTAssertEqual(snap.dayOpen, 96.0, accuracy: 0.001)
+        XCTAssertEqual(snap.intradayChangePct, 4.166, accuracy: 0.01)
+    }
+
+    func testDayRangePercentMatchesArithmetic() throws {
+        let json = makeJSON(
+            price: 233.65,
+            closes: [220.0, 233.65],
+            dayLow: 223.27,
+            dayHigh: 233.80
+        )
+        let snap = try XCTUnwrap(FinanceTools.parseStockSnapshot(json: json, symbol: "AMZN"))
+        XCTAssertEqual(snap.dayRange, 10.53, accuracy: 0.001)
+        // 10.53 / 223.27 * 100 ≈ 4.7163
+        XCTAssertEqual(snap.dayRangePct, 4.7163, accuracy: 0.01)
+    }
+
+    // MARK: - Formatter (the surface the model actually sees)
+
+    func testFormatIncludesIntradayAndDayRangeWithExplicitLabels() {
+        let snap = FinanceTools.StockSnapshot(
+            symbol: "AMZN",
+            name: "Amazon.com, Inc.",
+            price: 233.65,
+            prevClose: 220.00,
+            dayOpen: 228.40,
+            dayHigh: 233.80,
+            dayLow: 223.27
+        )
+        let body = FinanceTools.formatStockSnapshot(snap)
+        // Headline day-over-day vs prev close
+        XCTAssertTrue(body.contains("Day-over-day"))
+        XCTAssertTrue(body.contains("$220.00"))
+        XCTAssertTrue(body.contains("+6.20%"))
+        // Intraday vs today's open
+        XCTAssertTrue(body.contains("Intraday"))
+        XCTAssertTrue(body.contains("$228.40"))
+        XCTAssertTrue(body.contains("+2.30%"))
+        // Session range with absolute spread + percent
+        XCTAssertTrue(body.contains("Session range"))
+        XCTAssertTrue(body.contains("$223.27"))
+        XCTAssertTrue(body.contains("$233.80"))
+        XCTAssertTrue(body.contains("4.72%"))
+    }
+
+    func testFormatNeverCallsActiveSessionFlat() {
+        // The exact failure: prevClose unavailable, but the day moved
+        // ~4.7% intraday. The formatter must include an explicit
+        // anti-flat note so the small model can't summarize as "flat".
+        let snap = FinanceTools.StockSnapshot(
+            symbol: "AMZN",
+            name: "Amazon.com, Inc.",
+            price: 233.65,
+            prevClose: 0,                // unavailable
+            dayOpen: 228.40,
+            dayHigh: 233.80,
+            dayLow: 223.27
+        )
+        let body = FinanceTools.formatStockSnapshot(snap)
+        XCTAssertTrue(body.contains("unavailable"),
+                      "previous-close fallback line must surface the unknown state")
+        // Intraday is still concrete and meaningful
+        XCTAssertTrue(body.contains("Intraday"))
+        XCTAssertTrue(body.contains("+2.30%"))
+        // Session range carries a real percent
+        XCTAssertTrue(body.contains("4.72%"))
+        // Anti-fabrication note must fire because the session has clear movement
+        XCTAssertTrue(body.contains("NOT flat"),
+                      "active session must carry the explicit not-flat instruction")
+    }
+
+    func testFormatGenuinelyFlatSessionDoesNotEmitNotFlatNote() {
+        // The opposite check: a session with truly tiny movement (well
+        // under the 0.5% thresholds for both intraday and range) should
+        // NOT carry the not-flat note — it would be wrong to claim
+        // movement that didn't happen.
+        let snap = FinanceTools.StockSnapshot(
+            symbol: "TEST",
+            name: "Test Inc",
+            price: 100.00,
+            prevClose: 100.00,
+            dayOpen: 99.99,
+            dayHigh: 100.05,
+            dayLow: 99.95
+        )
+        let body = FinanceTools.formatStockSnapshot(snap)
+        XCTAssertFalse(body.contains("NOT flat"),
+                       "genuinely flat session should not emit the anti-flat note")
     }
 }
