@@ -8,8 +8,21 @@ final class OllamaClient: InferenceProvider, @unchecked Sendable {
     // where holding multiple models warm causes swap thrashing.
     private let keepAlive = "5m"
 
-    init(host: String = "http://127.0.0.1:11434") {
+    /// Optional draft model for speculative decoding. When set, chat()
+    /// and chatStream() include `draft_model: <name>` in the Ollama
+    /// request options. Ollama uses the draft for fast next-token
+    /// proposals; the main model verifies them in batches. On qwen-family
+    /// pairs (qwen3.5:0.8b drafting for qwen3.5:9b) the agreement rate is
+    /// high enough that a 1.5-2.5x generation speedup is realistic.
+    ///
+    /// Older Ollama versions silently ignore unknown options fields, so
+    /// sending `draft_model` against a build that doesn't support it is
+    /// harmless — the request still succeeds at the normal speed.
+    let draftModel: String?
+
+    init(host: String = "http://127.0.0.1:11434", draftModel: String? = nil) {
         self.host = host
+        self.draftModel = draftModel
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 600
         self.session = URLSession(configuration: config)
@@ -18,9 +31,10 @@ final class OllamaClient: InferenceProvider, @unchecked Sendable {
     /// Test-only initializer that accepts a pre-built URLSession (typically
     /// configured with a custom URLProtocol stub) so the request body can be
     /// inspected without hitting a real Ollama instance.
-    init(host: String, session: URLSession) {
+    init(host: String, session: URLSession, draftModel: String? = nil) {
         self.host = host
         self.session = session
+        self.draftModel = draftModel
     }
 
     // MARK: - Chat (non-streaming)
@@ -33,11 +47,15 @@ final class OllamaClient: InferenceProvider, @unchecked Sendable {
         numCtx: Int = 8192,
         timeout: TimeInterval? = nil
     ) async throws -> ChatResponse {
+        var options: [String: Any] = ["temperature": temperature, "num_ctx": numCtx]
+        if let draftModel, !draftModel.isEmpty {
+            options["draft_model"] = draftModel
+        }
         var payload: [String: Any] = [
             "model": model,
             "messages": messages,
             "stream": false,
-            "options": ["temperature": temperature, "num_ctx": numCtx],
+            "options": options,
             "keep_alive": keepAlive,
             "think": false,
         ]
@@ -69,15 +87,21 @@ final class OllamaClient: InferenceProvider, @unchecked Sendable {
         temperature: Double = 0.7,
         numCtx: Int = 8192
     ) -> AsyncThrowingStream<String, Error> {
-        AsyncThrowingStream { continuation in
+        let draft = self.draftModel
+        let ka = self.keepAlive
+        return AsyncThrowingStream { continuation in
             Task {
                 do {
+                    var options: [String: Any] = ["temperature": temperature, "num_ctx": numCtx]
+                    if let draft, !draft.isEmpty {
+                        options["draft_model"] = draft
+                    }
                     let payload: [String: Any] = [
                         "model": model,
                         "messages": messages,
                         "stream": true,
-                        "options": ["temperature": temperature, "num_ctx": numCtx],
-                        "keep_alive": keepAlive,
+                        "options": options,
+                        "keep_alive": ka,
                         "think": false,
                     ]
 

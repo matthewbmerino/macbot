@@ -49,13 +49,13 @@ final class StubURLProtocol: URLProtocol {
 
 final class OllamaClientTests: XCTestCase {
 
-    private func makeClient() -> OllamaClient {
+    private func makeClient(draftModel: String? = nil) -> OllamaClient {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [StubURLProtocol.self]
         let session = URLSession(configuration: config)
         StubURLProtocol.lastRequestBody = nil
         StubURLProtocol.lastRequestURL = nil
-        return OllamaClient(host: "http://stub", session: session)
+        return OllamaClient(host: "http://stub", session: session, draftModel: draftModel)
     }
 
     private func payload() throws -> [String: Any] {
@@ -144,6 +144,45 @@ final class OllamaClientTests: XCTestCase {
         XCTAssertEqual(body["model"] as? String, "qwen3-embedding:0.6b")
         XCTAssertEqual(body["input"] as? [String], ["hello", "world"])
         XCTAssertEqual(StubURLProtocol.lastRequestURL?.path, "/api/embed")
+    }
+
+    func testChatRequestIncludesDraftModelWhenConfigured() async throws {
+        // Speculative decoding wire-up: when OllamaClient is constructed
+        // with a draft model, every chat request must include
+        // `draft_model` in the options dict so Ollama can use it for
+        // speculative token proposals.
+        StubURLProtocol.responseBody = #"{"message":{"content":"hi"}}"#.data(using: .utf8)!
+        let client = makeClient(draftModel: "qwen3.5:0.8b")
+        _ = try await client.chat(
+            model: "qwen3.5:9b",
+            messages: [["role": "user", "content": "hello"]],
+            tools: nil,
+            temperature: 0.7,
+            numCtx: 8192,
+            timeout: nil
+        )
+        let body = try payload()
+        let options = try XCTUnwrap(body["options"] as? [String: Any])
+        XCTAssertEqual(options["draft_model"] as? String, "qwen3.5:0.8b")
+    }
+
+    func testChatRequestOmitsDraftModelWhenNotConfigured() async throws {
+        // Default: no draft model. Request must NOT carry the field —
+        // older Ollama versions might warn on unknown options keys, and
+        // we don't want to clutter the request payload.
+        StubURLProtocol.responseBody = #"{"message":{"content":"hi"}}"#.data(using: .utf8)!
+        let client = makeClient(draftModel: nil)
+        _ = try await client.chat(
+            model: "qwen3.5:9b",
+            messages: [["role": "user", "content": "hello"]],
+            tools: nil,
+            temperature: 0.7,
+            numCtx: 8192,
+            timeout: nil
+        )
+        let body = try payload()
+        let options = try XCTUnwrap(body["options"] as? [String: Any])
+        XCTAssertNil(options["draft_model"])
     }
 
     func testEmbedHandlesIntegerJSONNumbers() async throws {

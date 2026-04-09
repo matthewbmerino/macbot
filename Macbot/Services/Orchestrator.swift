@@ -285,7 +285,16 @@ final class Orchestrator {
         modelConfig: ModelConfig = ModelConfig(),
         soulPrompt: String? = nil
     ) {
-        self.client = OllamaClient(host: host)
+        // Wire speculative decoding by passing the (small, always-warm)
+        // router model as the draft for the (large) chat model. Only takes
+        // effect when ModelConfig.speculativeDecoding is true and the
+        // router model is non-empty. Older Ollama versions silently
+        // ignore the unknown `draft_model` option, so this is harmless
+        // on builds that don't support it.
+        let draftModel = (modelConfig.speculativeDecoding && !modelConfig.router.isEmpty)
+            ? modelConfig.router
+            : nil
+        self.client = OllamaClient(host: host, draftModel: draftModel)
         // MLX client available but not in hot path — all inference via Ollama
         self.router = Router(client: client, model: modelConfig.router)
         self.embeddingRouter = EmbeddingRouter(client: client, embeddingModel: modelConfig.embedding)
