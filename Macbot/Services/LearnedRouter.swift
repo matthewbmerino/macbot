@@ -36,6 +36,19 @@ enum LearnedRouter {
         } catch {
             return nil
         }
+        return predict(forQueryEmbedding: queryVec, topK: topK, minSimilarity: minSimilarity)
+    }
+
+    /// Variant that accepts a precomputed query embedding. Used when the
+    /// caller has already embedded the query for some other purpose (e.g.
+    /// learned-skill retrieval) — sharing the vector saves an Ollama
+    /// round-trip on the hot path.
+    static func predict(
+        forQueryEmbedding queryVec: [Float],
+        topK: Int = 8,
+        minSimilarity: Float = 0.55
+    ) -> LearnedPrediction? {
+        guard !queryVec.isEmpty else { return nil }
 
         let neighbors = TraceStore.shared.searchSimilar(embedding: queryVec, topK: topK)
         let filtered = neighbors.filter { $0.1 >= minSimilarity }

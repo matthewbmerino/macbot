@@ -4,7 +4,13 @@ actor ToolRegistry {
     private var specs: [ToolSpec] = []
     private var handlers: [String: ToolHandler] = [:]
 
-    static let toolTimeout: TimeInterval = 60
+    // 30s blanket timeout. The previous 60s was too generous — most tools
+    // should return in 1–10s, and a hung tool taking a full minute to
+    // surface its error is a quality-of-experience problem. 30s leaves
+    // headroom for legitimately slow operations (large web fetches, Python
+    // script with cold matplotlib import) without making the user wait.
+    // A future per-category split (fast/medium/slow) is the next step.
+    static let toolTimeout: TimeInterval = 30
 
     func register(_ spec: ToolSpec, handler: @escaping ToolHandler) {
         specs.append(spec)

@@ -11,41 +11,64 @@ final class Orchestrator {
     let compositeToolStore: CompositeToolStore
     var modelConfig: ModelConfig
 
-    /// Retrieve top-K learned skills relevant to the new message and inject
-    /// them as a transient system message. The agent sees these *as if* it
-    /// always knew them, which compounds across sessions.
-    func injectLearnedSkills(agent: BaseAgent, message: String) async {
-        let skills = await SkillStore.shared.retrieve(
-            forQuery: message,
-            client: client,
-            embeddingModel: modelConfig.embedding,
-            topK: 5
-        )
-        let block = SkillStore.formatForPrompt(skills)
-        guard !block.isEmpty else { return }
-        agent.history.append(["role": "system", "content": block])
-    }
+    /// Inject learned skills + apply learned tool routing in a single pass
+    /// that embeds the message exactly once and runs both consumers
+    /// concurrently. Previously these were two sequential helpers, each
+    /// independently embedding the same query — two Ollama round-trips per
+    /// turn for no reason. This collapses that to one round-trip and runs
+    /// the two k-NN steps in parallel.
+    @discardableResult
+    func injectSkillsAndLearnedRouting(agent: BaseAgent, message: String) async -> LearnedPrediction? {
+        // 1. Embed the user message once.
+        let queryVec: [Float]
+        do {
+            let vecs = try await client.embed(model: modelConfig.embedding, text: [message])
+            queryVec = vecs.first ?? []
+        } catch {
+            queryVec = []
+        }
 
-    /// Run the learned router and apply its predictions: tool hints get
-    /// merged into the agent's recency-bias slot. Agent override is logged
-    /// but NOT applied yet — we keep the keyword router as ground truth
-    /// until the eval harness shows learned routing wins.
-    func applyLearnedRouting(agent: BaseAgent, message: String) async -> LearnedPrediction? {
-        guard let prediction = await LearnedRouter.predict(
-            query: message,
-            client: client,
-            embeddingModel: modelConfig.embedding,
-            topK: 8,
-            minSimilarity: 0.55
-        ) else {
+        // Empty embedding → both downstream consumers degrade gracefully.
+        if queryVec.isEmpty {
             agent.learnedToolHints = []
             return nil
         }
-        agent.learnedToolHints = prediction.tools
-        if !prediction.tools.isEmpty {
-            ActivityLog.shared.log(.routing, "Learned hints: \(prediction.tools.joined(separator: ",")) (\(prediction.neighborCount) neighbors, sim=\(String(format: "%.2f", prediction.topSimilarity)))")
+
+        // 2. Run skill retrieval and learned routing concurrently. Skill
+        //    retrieval scans the SkillStore in-memory; learned routing
+        //    scans TraceStore's vector index. Neither touches the network
+        //    after the embed above, so they're cheap to parallelize.
+        async let skillsTask = SkillStore.shared.retrieve(forQueryEmbedding: queryVec, topK: 5)
+        async let predictionTask = LearnedRouter.predict(
+            forQueryEmbedding: queryVec,
+            topK: 8,
+            minSimilarity: 0.55
+        )
+        let (skills, prediction) = await (skillsTask, predictionTask)
+
+        // 3. Apply the results.
+        let block = SkillStore.formatForPrompt(skills)
+        if !block.isEmpty {
+            agent.history.append(["role": "system", "content": block])
+        }
+        agent.learnedToolHints = prediction?.tools ?? []
+        if let prediction, !prediction.tools.isEmpty {
+            ActivityLog.shared.log(
+                .routing,
+                "Learned hints: \(prediction.tools.joined(separator: ",")) (\(prediction.neighborCount) neighbors, sim=\(String(format: "%.2f", prediction.topSimilarity)))"
+            )
         }
         return prediction
+    }
+
+    // Legacy entry points kept for any external callers; they delegate to the
+    // combined helper above so there's no duplicated embedding cost.
+    func injectLearnedSkills(agent: BaseAgent, message: String) async {
+        _ = await injectSkillsAndLearnedRouting(agent: agent, message: message)
+    }
+
+    func applyLearnedRouting(agent: BaseAgent, message: String) async -> LearnedPrediction? {
+        await injectSkillsAndLearnedRouting(agent: agent, message: message)
     }
 
     /// Fire-and-forget skill distillation. Runs on a detached task with the
@@ -359,9 +382,9 @@ final class Orchestrator {
 
         conv.messageCount += 1
         injectPromptModules(agent: agent, conv: conv, isPlanning: plan, message: message)
-        await injectLearnedSkills(agent: agent, message: message)
-        let learnedPrediction = await applyLearnedRouting(agent: agent, message: message)
-        _ = learnedPrediction  // logged for now; future: feed into route decision
+        // One embed call, two consumers, parallel k-NN. Replaces what used
+        // to be two sequential helpers each doing their own embed.
+        _ = await injectSkillsAndLearnedRouting(agent: agent, message: message)
 
         // Trace begin
         let trace = TraceBuilder(
@@ -439,7 +462,10 @@ final class Orchestrator {
 
                     conv.messageCount += 1
                     injectPromptModules(agent: agent, conv: conv, isPlanning: plan, message: message)
-                    await injectLearnedSkills(agent: agent, message: message)
+                    // One embed call shared between skill retrieval and
+                    // learned-router tool-hint biasing. See the non-streaming
+                    // path above.
+                    _ = await self.injectSkillsAndLearnedRouting(agent: agent, message: message)
 
                     // Trace begin
                     let trace = TraceBuilder(
@@ -505,21 +531,16 @@ final class Orchestrator {
             return skip
         }
 
-        // Prefer embedding router (faster, more deterministic) with LLM fallback
+        // Embedding router is the single source of truth for routing.
+        //
+        // Previously this called the LLM router (qwen3.5:0.8b, ~500-800ms)
+        // as a "rescue" whenever the embedding router returned `general`.
+        // That paid the LLM cost on every general turn (the majority of
+        // turns) to catch maybe 5% of misroutes — terrible ROI on the hot
+        // path. Users with stronger routing intent have explicit overrides
+        // via /code, /think, /see, /chat, /knowledge.
         ActivityLog.shared.log(.routing, "Classifying message...")
         let category = await embeddingRouter.classify(message: message, hasImages: hasImages)
-
-        // If embedding router has low confidence, cross-check with LLM router
-        if category == .general {
-            ActivityLog.shared.log(.routing, "Embedding → general, checking LLM router...")
-            let llmCategory = await router.classify(message: message, hasImages: hasImages)
-            if llmCategory != .general {
-                Log.agents.info("[orchestrator] embedding->general, LLM->\(llmCategory.rawValue), using LLM")
-                ActivityLog.shared.log(.routing, "LLM router → \(llmCategory.displayName)")
-                updateAffinity(conv: conv, category: llmCategory)
-                return llmCategory
-            }
-        }
 
         updateAffinity(conv: conv, category: category)
         return category
