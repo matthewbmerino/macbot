@@ -130,6 +130,20 @@ class BaseAgent {
         self.client = client
     }
 
+    /// Concatenate every "tool" role message in the current history into a
+    /// single haystack string. Used by the citation guard to know what
+    /// numbers the model is allowed to cite this turn.
+    func collectToolHistoryText() -> String {
+        var parts: [String] = []
+        for msg in history {
+            guard let role = msg["role"] as? String, role == "tool" else { continue }
+            if let content = msg["content"] as? String, !content.isEmpty {
+                parts.append(content)
+            }
+        }
+        return parts.joined(separator: "\n")
+    }
+
     /// Sampling temperature to use for the next chat() call.
     ///
     /// Once any tool has been called this turn we have grounded data the model
@@ -405,6 +419,36 @@ class BaseAgent {
 
             guard let toolCalls = resp.toolCalls, !toolCalls.isEmpty else {
                 let response = ThinkingStripper.strip(resp.content)
+
+                // Citation guard: deterministic check that every numeric
+                // claim in the draft is supported by some tool result this
+                // turn. Catches the fabrication-by-paraphrase failures
+                // (rounding, smoothing, made-up percentages) without an
+                // extra LLM call. Only runs when tools were actually
+                // called this turn — otherwise the "tool history" is empty
+                // and we have nothing to check against.
+                if toolCallCount > 0 {
+                    let toolHistoryText = collectToolHistoryText()
+                    let result = CitationGuard.check(
+                        draft: response,
+                        toolHistory: toolHistoryText
+                    )
+                    if !result.isGrounded {
+                        Log.agents.warning("[\(self.name)] citation guard fired: \(result.unsourced.map(\.original).joined(separator: ","))")
+                        ActivityLog.shared.log(.inference, "Citation check failed — regenerating with tool-grounding nudge")
+                        appendToHistory([
+                            "role": "system",
+                            "content": CitationGuard.regenerationNudge(for: result.unsourced),
+                        ])
+                        let regen = try await client.chat(
+                            model: model, messages: history, tools: nil,
+                            temperature: adaptiveTemperature(toolCallCount: toolCallCount),
+                            numCtx: numCtx, timeout: 120
+                        )
+                        appendToHistory(["role": "assistant", "content": regen.content])
+                        return ThinkingStripper.strip(regen.content)
+                    }
+                }
 
                 // Self-verification: does this actually answer the question?
                 if toolCallCount > 0, let issue = await verify(response: response, originalQuery: input) {
