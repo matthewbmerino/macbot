@@ -10,6 +10,7 @@ struct CanvasView: View {
     @State private var showAIBar = false
     @State private var isRenamingCanvas = false
     @State private var canvasRenameText = ""
+    @FocusState private var canvasFocused: Bool
 
     /// Center of the canvas viewport in view coordinates (for keyboard zoom).
     private var viewCenter: CGPoint {
@@ -44,6 +45,9 @@ struct CanvasView: View {
             }
             .clipped()
             .background(MacbotDS.Colors.bg)
+            .focusable()
+            .focused($canvasFocused)
+            .onAppear { canvasFocused = true }
             .onKeyPress(.delete) {
                 guard viewModel.editingNodeId == nil else { return .ignored }
                 withAnimation(Motion.snappy) { viewModel.deleteSelected() }
@@ -257,6 +261,7 @@ struct CanvasView: View {
                 viewModel.exit3DNode()
                 viewModel.clearSelection()
                 showAIBar = false
+                canvasFocused = true
             }
             .onAppear { viewModel.viewSize = geo.size }
             .onChange(of: geo.size) { _, newSize in viewModel.viewSize = newSize }
@@ -761,6 +766,7 @@ struct CanvasView: View {
                         let exclusive = !NSEvent.modifierFlags.contains(.command)
                             && !NSEvent.modifierFlags.contains(.shift)
                         viewModel.select(node.id, exclusive: exclusive)
+                        canvasFocused = true
                     }
                 } else {
                     viewModel.commitMove()
