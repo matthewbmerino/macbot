@@ -67,8 +67,13 @@ struct CanvasView: View {
                 }
                 return .handled
             }
-            // Cmd shortcuts — check modifier inside the handler
-            .onKeyPress(characters: CharacterSet(charactersIn: "01ag")) { press in
+            // Backspace also deletes
+            .onKeyPress(.init("\u{08}")) {
+                withAnimation(Motion.snappy) { viewModel.deleteSelected() }
+                return .handled
+            }
+            // Cmd shortcuts
+            .onKeyPress(characters: CharacterSet(charactersIn: "01agcvxdz")) { press in
                 guard press.modifiers.contains(.command) else { return .ignored }
                 switch press.characters {
                 case "0":
@@ -87,6 +92,25 @@ struct CanvasView: View {
                     return .handled
                 case "g":
                     withAnimation(Motion.snappy) { viewModel.groupFromSelection() }
+                    return .handled
+                case "c":
+                    viewModel.copySelected()
+                    return .handled
+                case "v":
+                    withAnimation(Motion.snappy) { viewModel.paste() }
+                    return .handled
+                case "x":
+                    viewModel.cutSelected()
+                    return .handled
+                case "d":
+                    withAnimation(Motion.snappy) { viewModel.duplicateSelected() }
+                    return .handled
+                case "z":
+                    if press.modifiers.contains(.shift) {
+                        withAnimation(Motion.snappy) { viewModel.redo() }
+                    } else {
+                        withAnimation(Motion.snappy) { viewModel.undo() }
+                    }
                     return .handled
                 default:
                     return .ignored

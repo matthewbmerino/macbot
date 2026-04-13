@@ -61,6 +61,109 @@ final class CanvasViewModel {
     var chatInputText: String = ""
     var showCanvasChat: Bool = false
 
+    // MARK: - Undo / Redo
+
+    private var undoStack: [CanvasSnapshot] = []
+    private var redoStack: [CanvasSnapshot] = []
+    private static let maxUndoLevels = 40
+
+    var canUndo: Bool { !undoStack.isEmpty }
+    var canRedo: Bool { !redoStack.isEmpty }
+
+    private struct CanvasSnapshot {
+        let nodes: [CanvasNode]
+        let edges: [CanvasEdge]
+        let groups: [CanvasGroup]
+    }
+
+    /// Call before any mutation to push a snapshot onto the undo stack.
+    private func pushUndo() {
+        undoStack.append(CanvasSnapshot(nodes: nodes, edges: edges, groups: groups))
+        if undoStack.count > Self.maxUndoLevels {
+            undoStack.removeFirst()
+        }
+        redoStack.removeAll()
+    }
+
+    func undo() {
+        guard let snapshot = undoStack.popLast() else { return }
+        redoStack.append(CanvasSnapshot(nodes: nodes, edges: edges, groups: groups))
+        nodes = snapshot.nodes
+        edges = snapshot.edges
+        groups = snapshot.groups
+        clearSelection()
+        scheduleSave()
+    }
+
+    func redo() {
+        guard let snapshot = redoStack.popLast() else { return }
+        undoStack.append(CanvasSnapshot(nodes: nodes, edges: edges, groups: groups))
+        nodes = snapshot.nodes
+        edges = snapshot.edges
+        groups = snapshot.groups
+        clearSelection()
+        scheduleSave()
+    }
+
+    // MARK: - Clipboard
+
+    /// Nodes + edges currently in the clipboard (in-app only).
+    private var clipboard: (nodes: [CanvasNode], edges: [CanvasEdge]) = ([], [])
+
+    func copySelected() {
+        let ids = selectedIds
+        clipboard.nodes = nodes.filter { ids.contains($0.id) }
+        clipboard.edges = edges.filter { ids.contains($0.fromId) && ids.contains($0.toId) }
+    }
+
+    func cutSelected() {
+        copySelected()
+        pushUndo()
+        withAnimation(Motion.snappy) { deleteSelected() }
+    }
+
+    func paste() {
+        guard !clipboard.nodes.isEmpty else { return }
+        pushUndo()
+
+        // Offset pasted nodes slightly so they don't stack exactly on originals
+        let pasteOffset = CGPoint(x: 30, y: 30)
+        var idMap: [UUID: UUID] = [:]  // old ID → new ID
+
+        var newNodes: [CanvasNode] = []
+        for old in clipboard.nodes {
+            let newId = UUID()
+            idMap[old.id] = newId
+            let node = CanvasNode(
+                id: newId,
+                position: CGPoint(x: old.position.x + pasteOffset.x, y: old.position.y + pasteOffset.y),
+                text: old.text,
+                width: old.width,
+                color: old.color,
+                source: old.source,
+                groupId: nil
+            )
+            newNodes.append(node)
+        }
+
+        var newEdges: [CanvasEdge] = []
+        for old in clipboard.edges {
+            if let newFrom = idMap[old.fromId], let newTo = idMap[old.toId] {
+                newEdges.append(CanvasEdge(fromId: newFrom, toId: newTo, label: old.label))
+            }
+        }
+
+        nodes.append(contentsOf: newNodes)
+        edges.append(contentsOf: newEdges)
+        selectedIds = Set(newNodes.map(\.id))
+        scheduleSave()
+    }
+
+    func duplicateSelected() {
+        copySelected()
+        paste()
+    }
+
     // MARK: - Persistence
 
     private let canvasStore = CanvasStore()
@@ -160,6 +263,7 @@ final class CanvasViewModel {
     // MARK: - Node CRUD
 
     func addNode(at canvasPoint: CGPoint, color: CanvasNode.NodeColor = .note) {
+        pushUndo()
         let node = CanvasNode(position: canvasPoint, color: color)
         nodes.append(node)
         selectedIds = [node.id]
@@ -176,6 +280,7 @@ final class CanvasViewModel {
         agentCategory: AgentCategory?,
         timestamp: Date
     ) {
+        pushUndo()
         let origin = NodeSource.ChatOrigin(
             chatId: chatId,
             chatTitle: chatTitle,
@@ -202,6 +307,7 @@ final class CanvasViewModel {
         chatTitle: String,
         centerAt canvasPoint: CGPoint
     ) {
+        pushUndo()
         let filtered = messages.filter { $0.role == "user" || $0.role == "assistant" }
         guard !filtered.isEmpty else { return }
 
@@ -249,6 +355,7 @@ final class CanvasViewModel {
     }
 
     func deleteSelected() {
+        pushUndo()
         let ids = selectedIds
         nodes.removeAll { ids.contains($0.id) }
         edges.removeAll { ids.contains($0.fromId) || ids.contains($0.toId) }
@@ -316,6 +423,7 @@ final class CanvasViewModel {
     func groupFromSelection() {
         let selected = nodes.filter { selectedIds.contains($0.id) }
         guard selected.count >= 2 else { return }
+        pushUndo()
 
         let minX = selected.map(\.position.x).min()! - 30
         let minY = selected.map(\.position.y).min()! - 40
@@ -337,6 +445,7 @@ final class CanvasViewModel {
     }
 
     func ungroupSelected() {
+        pushUndo()
         let groupIds = Set(nodes.filter { selectedIds.contains($0.id) }.compactMap(\.groupId))
         for id in selectedIds {
             if let idx = nodes.firstIndex(where: { $0.id == id }) {
@@ -366,6 +475,7 @@ final class CanvasViewModel {
     }
 
     func deleteGroup(id: UUID) {
+        pushUndo()
         // Ungroup nodes, don't delete them
         for i in nodes.indices where nodes[i].groupId == id {
             nodes[i].groupId = nil
