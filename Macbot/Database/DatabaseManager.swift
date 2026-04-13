@@ -253,6 +253,16 @@ final class DatabaseManager: Sendable {
             try db.create(index: "idx_canvas_groups_canvasId", on: "canvas_groups", columns: ["canvasId"])
         }
 
+        // Edge styling — line style, color, direction, weight
+        migrator.registerMigration("v10_edge_styles") { db in
+            try db.alter(table: "canvas_edges") { t in
+                t.add(column: "style", .text).defaults(to: "solid")
+                t.add(column: "color", .text).defaults(to: "neutral")
+                t.add(column: "direction", .text).defaults(to: "forward")
+                t.add(column: "weight", .text).defaults(to: "normal")
+            }
+        }
+
         return migrator
     }
 

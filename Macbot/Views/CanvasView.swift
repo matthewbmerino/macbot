@@ -274,6 +274,14 @@ struct CanvasView: View {
 
     // MARK: - Edges
 
+    private func edgeSwiftUIColor(_ edge: CanvasEdge) -> Color {
+        let c = edge.color.color
+        if edge.color == .neutral {
+            return MacbotDS.Colors.textTer.opacity(0.55)
+        }
+        return Color(hue: c.hue, saturation: c.saturation, brightness: c.brightness)
+    }
+
     private var edgesLayer: some View {
         Canvas { ctx, _ in
             for edge in viewModel.edges {
@@ -282,7 +290,9 @@ struct CanvasView: View {
 
                 let p1 = viewModel.canvasToView(from.position)
                 let p2 = viewModel.canvasToView(to.position)
+                let lineWidth = edge.weight.lineWidth * viewModel.scale
 
+                // Curved path
                 var path = Path()
                 let mid = CGPoint(x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2)
                 let cp1 = CGPoint(x: mid.x, y: p1.y)
@@ -290,42 +300,65 @@ struct CanvasView: View {
                 path.move(to: p1)
                 path.addCurve(to: p2, control1: cp1, control2: cp2)
 
-                ctx.stroke(
-                    path,
-                    with: .color(MacbotDS.Colors.textTer.opacity(0.5)),
-                    lineWidth: 1.5 * viewModel.scale
-                )
+                let c = edge.color.color
+                let resolvedColor: Color
+                if edge.color == .neutral {
+                    resolvedColor = Color(nsColor: .tertiaryLabelColor).opacity(0.55)
+                } else {
+                    resolvedColor = Color(hue: c.hue, saturation: c.saturation, brightness: c.brightness)
+                }
 
-                // Arrowhead
-                let angle = atan2(p2.y - cp2.y, p2.x - cp2.x)
-                let arrowLen: CGFloat = 8 * viewModel.scale
-                var arrow = Path()
-                arrow.move(to: p2)
-                arrow.addLine(to: CGPoint(
-                    x: p2.x - arrowLen * cos(angle - .pi / 6),
-                    y: p2.y - arrowLen * sin(angle - .pi / 6)
-                ))
-                arrow.move(to: p2)
-                arrow.addLine(to: CGPoint(
-                    x: p2.x - arrowLen * cos(angle + .pi / 6),
-                    y: p2.y - arrowLen * sin(angle + .pi / 6)
-                ))
-                ctx.stroke(
-                    arrow,
-                    with: .color(MacbotDS.Colors.textTer.opacity(0.5)),
-                    lineWidth: 1.5 * viewModel.scale
+                let strokeStyle = StrokeStyle(
+                    lineWidth: lineWidth,
+                    lineCap: .round,
+                    lineJoin: .round,
+                    dash: edge.style.dashPattern.map { $0 * viewModel.scale }
                 )
+                ctx.stroke(path, with: .color(resolvedColor), style: strokeStyle)
+
+                // Arrowheads based on direction
+                let arrowLen: CGFloat = (6 + edge.weight.lineWidth * 2) * viewModel.scale
+
+                if edge.direction == .forward || edge.direction == .both {
+                    let angle = atan2(p2.y - cp2.y, p2.x - cp2.x)
+                    drawArrowhead(ctx: ctx, at: p2, angle: angle, length: arrowLen,
+                                  color: resolvedColor, lineWidth: lineWidth)
+                }
+
+                if edge.direction == .backward || edge.direction == .both {
+                    let angle = atan2(p1.y - cp1.y, p1.x - cp1.x)
+                    drawArrowhead(ctx: ctx, at: p1, angle: angle, length: arrowLen,
+                                  color: resolvedColor, lineWidth: lineWidth)
+                }
             }
         }
         .allowsHitTesting(false)
     }
 
-    // MARK: - Edge Labels
+    private func drawArrowhead(
+        ctx: GraphicsContext, at point: CGPoint, angle: CGFloat,
+        length: CGFloat, color: Color, lineWidth: CGFloat
+    ) {
+        var arrow = Path()
+        arrow.move(to: point)
+        arrow.addLine(to: CGPoint(
+            x: point.x - length * cos(angle - .pi / 6),
+            y: point.y - length * sin(angle - .pi / 6)
+        ))
+        arrow.move(to: point)
+        arrow.addLine(to: CGPoint(
+            x: point.x - length * cos(angle + .pi / 6),
+            y: point.y - length * sin(angle + .pi / 6)
+        ))
+        ctx.stroke(arrow, with: .color(color),
+                   style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+    }
+
+    // MARK: - Edge Labels & Interaction
 
     private var edgeLabelsLayer: some View {
         ForEach(viewModel.edges) { edge in
-            if let label = edge.label,
-               let from = viewModel.nodes.first(where: { $0.id == edge.fromId }),
+            if let from = viewModel.nodes.first(where: { $0.id == edge.fromId }),
                let to = viewModel.nodes.first(where: { $0.id == edge.toId }) {
                 let p1 = viewModel.canvasToView(from.position)
                 let p2 = viewModel.canvasToView(to.position)
@@ -339,28 +372,137 @@ struct CanvasView: View {
                     .position(midpoint)
                     .scaleEffect(viewModel.scale)
                 } else {
-                    Text(label)
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(MacbotDS.Colors.textTer)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(MacbotDS.Mat.float)
-                        .clipShape(Capsule())
+                    edgeLabelView(edge: edge)
                         .position(midpoint)
                         .scaleEffect(viewModel.scale)
                         .onTapGesture(count: 2) {
                             viewModel.editingEdgeId = edge.id
-                            viewModel.editingEdgeLabel = label
+                            viewModel.editingEdgeLabel = edge.label ?? ""
                         }
-                        .contextMenu {
-                            ForEach(["supports", "contradicts", "leads to", "expands", "example of"], id: \.self) { preset in
-                                Button(preset) { viewModel.updateEdgeLabel(id: edge.id, label: preset) }
-                            }
-                            Divider()
-                            Button("Remove Label") { viewModel.updateEdgeLabel(id: edge.id, label: "") }
-                        }
+                        .contextMenu { edgeContextMenu(edge: edge) }
                 }
             }
+        }
+    }
+
+    private func edgeLabelView(edge: CanvasEdge) -> some View {
+        let hasLabel = edge.label != nil && !edge.label!.isEmpty
+        let displayColor = edgeSwiftUIColor(edge)
+
+        return HStack(spacing: 3) {
+            // Direction indicator
+            if edge.direction == .both {
+                Image(systemName: "arrow.left.arrow.right")
+                    .font(.system(size: 7))
+            }
+
+            if hasLabel {
+                Text(edge.label!)
+                    .font(.system(size: 9, weight: .medium))
+            }
+
+            // Style indicator dot for non-solid lines without a label
+            if !hasLabel {
+                Circle()
+                    .fill(displayColor)
+                    .frame(width: 6, height: 6)
+            }
+        }
+        .foregroundStyle(displayColor)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(MacbotDS.Mat.float)
+        .clipShape(Capsule())
+    }
+
+    @ViewBuilder
+    private func edgeContextMenu(edge: CanvasEdge) -> some View {
+        // Relationship presets
+        Menu("Relationship") {
+            ForEach(EdgePreset.allCases, id: \.self) { preset in
+                Button(preset.label) { viewModel.applyEdgePreset(id: edge.id, preset: preset) }
+            }
+        }
+
+        Divider()
+
+        // Line style
+        Menu("Line Style") {
+            ForEach(CanvasEdge.EdgeStyle.allCases, id: \.self) { style in
+                Button {
+                    viewModel.updateEdgeStyle(id: edge.id, style: style)
+                } label: {
+                    HStack {
+                        Text(style.rawValue.capitalized)
+                        if edge.style == style { Image(systemName: "checkmark") }
+                    }
+                }
+            }
+        }
+
+        // Color
+        Menu("Color") {
+            ForEach(CanvasEdge.EdgeColor.allCases, id: \.self) { color in
+                Button {
+                    viewModel.updateEdgeColor(id: edge.id, color: color)
+                } label: {
+                    HStack {
+                        Text(color.rawValue.capitalized)
+                        if edge.color == color { Image(systemName: "checkmark") }
+                    }
+                }
+            }
+        }
+
+        // Direction
+        Menu("Direction") {
+            ForEach(CanvasEdge.EdgeDirection.allCases, id: \.self) { dir in
+                Button {
+                    viewModel.updateEdgeDirection(id: edge.id, direction: dir)
+                } label: {
+                    let symbol: String = switch dir {
+                    case .forward:  "arrow.right"
+                    case .backward: "arrow.left"
+                    case .both:     "arrow.left.arrow.right"
+                    case .none:     "minus"
+                    }
+                    HStack {
+                        Label(dir.rawValue.capitalized, systemImage: symbol)
+                        if edge.direction == dir { Image(systemName: "checkmark") }
+                    }
+                }
+            }
+        }
+
+        // Weight
+        Menu("Weight") {
+            ForEach(CanvasEdge.EdgeWeight.allCases, id: \.self) { w in
+                Button {
+                    viewModel.updateEdgeWeight(id: edge.id, weight: w)
+                } label: {
+                    HStack {
+                        Text(w.rawValue.capitalized)
+                        if edge.weight == w { Image(systemName: "checkmark") }
+                    }
+                }
+            }
+        }
+
+        Divider()
+
+        Button("Edit Label") {
+            viewModel.editingEdgeId = edge.id
+            viewModel.editingEdgeLabel = edge.label ?? ""
+        }
+
+        Button("Remove Label") {
+            viewModel.updateEdgeLabel(id: edge.id, label: "")
+        }
+
+        Divider()
+
+        Button("Delete Connection", role: .destructive) {
+            viewModel.deleteEdge(id: edge.id)
         }
     }
 

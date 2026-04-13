@@ -418,6 +418,39 @@ final class CanvasViewModel {
         scheduleSave()
     }
 
+    func updateEdgeStyle(id: UUID, style: CanvasEdge.EdgeStyle) {
+        guard let idx = edges.firstIndex(where: { $0.id == id }) else { return }
+        edges[idx].style = style
+        scheduleSave()
+    }
+
+    func updateEdgeColor(id: UUID, color: CanvasEdge.EdgeColor) {
+        guard let idx = edges.firstIndex(where: { $0.id == id }) else { return }
+        edges[idx].color = color
+        scheduleSave()
+    }
+
+    func updateEdgeDirection(id: UUID, direction: CanvasEdge.EdgeDirection) {
+        guard let idx = edges.firstIndex(where: { $0.id == id }) else { return }
+        edges[idx].direction = direction
+        scheduleSave()
+    }
+
+    func updateEdgeWeight(id: UUID, weight: CanvasEdge.EdgeWeight) {
+        guard let idx = edges.firstIndex(where: { $0.id == id }) else { return }
+        edges[idx].weight = weight
+        scheduleSave()
+    }
+
+    func applyEdgePreset(id: UUID, preset: EdgePreset) {
+        guard let idx = edges.firstIndex(where: { $0.id == id }) else { return }
+        edges[idx].label = preset.label
+        edges[idx].style = preset.style
+        edges[idx].color = preset.color
+        edges[idx].direction = preset.direction
+        scheduleSave()
+    }
+
     // MARK: - Groups
 
     func groupFromSelection() {

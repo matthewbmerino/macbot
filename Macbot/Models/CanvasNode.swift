@@ -78,18 +78,137 @@ struct CanvasNode: Identifiable, Equatable {
     }
 }
 
-/// A directional connection between two canvas nodes.
+/// A connection between two canvas nodes with visual styling.
 struct CanvasEdge: Identifiable, Equatable {
     let id: UUID
     var fromId: UUID
     var toId: UUID
     var label: String?
+    var style: EdgeStyle
+    var color: EdgeColor
+    var direction: EdgeDirection
+    var weight: EdgeWeight
 
-    init(id: UUID = UUID(), fromId: UUID, toId: UUID, label: String? = nil) {
+    init(
+        id: UUID = UUID(),
+        fromId: UUID,
+        toId: UUID,
+        label: String? = nil,
+        style: EdgeStyle = .solid,
+        color: EdgeColor = .neutral,
+        direction: EdgeDirection = .forward,
+        weight: EdgeWeight = .normal
+    ) {
         self.id = id
         self.fromId = fromId
         self.toId = toId
         self.label = label
+        self.style = style
+        self.color = color
+        self.direction = direction
+        self.weight = weight
+    }
+
+    enum EdgeStyle: String, CaseIterable {
+        case solid, dashed, dotted
+
+        var dashPattern: [CGFloat] {
+            switch self {
+            case .solid:  return []
+            case .dashed: return [8, 5]
+            case .dotted: return [2, 4]
+            }
+        }
+    }
+
+    enum EdgeColor: String, CaseIterable {
+        case neutral    // default gray
+        case supports   // green — agreement, evidence
+        case contradicts // red — disagreement, tension
+        case inspires   // amber — creative influence
+        case depends    // blue — dependency, prerequisite
+        case question   // purple — inquiry, exploration
+
+        var color: (hue: Double, saturation: Double, brightness: Double) {
+            switch self {
+            case .neutral:     return (0, 0, 0.5)
+            case .supports:    return (0.35, 0.55, 0.7)
+            case .contradicts: return (0.0, 0.55, 0.75)
+            case .inspires:    return (0.1, 0.55, 0.8)
+            case .depends:     return (0.6, 0.5, 0.7)
+            case .question:    return (0.77, 0.45, 0.75)
+            }
+        }
+    }
+
+    enum EdgeDirection: String, CaseIterable {
+        case forward    // →
+        case backward   // ←
+        case both       // ↔
+        case none       // — (no arrows)
+    }
+
+    enum EdgeWeight: String, CaseIterable {
+        case thin, normal, thick
+
+        var lineWidth: CGFloat {
+            switch self {
+            case .thin:   return 1.0
+            case .normal: return 1.8
+            case .thick:  return 3.0
+            }
+        }
+    }
+}
+
+/// Preset relationship types that set label + style + color together.
+enum EdgePreset: String, CaseIterable {
+    case supports    // green solid →
+    case contradicts // red dashed →
+    case leadsTo     // neutral solid →
+    case expands     // neutral solid →
+    case inspires    // amber dotted ↔
+    case dependsOn   // blue solid →
+    case questions   // purple dashed →
+    case relatedTo   // neutral dashed ↔
+
+    var label: String {
+        switch self {
+        case .supports:    return "supports"
+        case .contradicts: return "contradicts"
+        case .leadsTo:     return "leads to"
+        case .expands:     return "expands"
+        case .inspires:    return "inspires"
+        case .dependsOn:   return "depends on"
+        case .questions:   return "questions"
+        case .relatedTo:   return "related to"
+        }
+    }
+
+    var style: CanvasEdge.EdgeStyle {
+        switch self {
+        case .supports, .leadsTo, .expands, .dependsOn: return .solid
+        case .contradicts, .questions, .relatedTo:       return .dashed
+        case .inspires:                                   return .dotted
+        }
+    }
+
+    var color: CanvasEdge.EdgeColor {
+        switch self {
+        case .supports:    return .supports
+        case .contradicts: return .contradicts
+        case .inspires:    return .inspires
+        case .dependsOn:   return .depends
+        case .questions:   return .question
+        case .leadsTo, .expands, .relatedTo: return .neutral
+        }
+    }
+
+    var direction: CanvasEdge.EdgeDirection {
+        switch self {
+        case .inspires, .relatedTo: return .both
+        default:                     return .forward
+        }
     }
 }
 

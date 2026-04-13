@@ -42,6 +42,10 @@ struct CanvasEdgeRecord: Codable, FetchableRecord, PersistableRecord, Identifiab
     var fromNodeId: String
     var toNodeId: String
     var label: String?
+    var style: String
+    var color: String
+    var direction: String
+    var weight: String
 
     static let databaseTableName = "canvas_edges"
 }
@@ -161,7 +165,11 @@ final class CanvasStore {
                         canvasId: canvasId,
                         fromNodeId: edge.fromId.uuidString,
                         toNodeId: edge.toId.uuidString,
-                        label: edge.label
+                        label: edge.label,
+                        style: edge.style.rawValue,
+                        color: edge.color.rawValue,
+                        direction: edge.direction.rawValue,
+                        weight: edge.weight.rawValue
                     )
                     try record.insert(db)
                 }
@@ -309,7 +317,14 @@ final class CanvasStore {
         guard let id = UUID(uuidString: r.id),
               let fromId = UUID(uuidString: r.fromNodeId),
               let toId = UUID(uuidString: r.toNodeId) else { return nil }
-        return CanvasEdge(id: id, fromId: fromId, toId: toId, label: r.label)
+        return CanvasEdge(
+            id: id, fromId: fromId, toId: toId,
+            label: r.label,
+            style: CanvasEdge.EdgeStyle(rawValue: r.style) ?? .solid,
+            color: CanvasEdge.EdgeColor(rawValue: r.color) ?? .neutral,
+            direction: CanvasEdge.EdgeDirection(rawValue: r.direction) ?? .forward,
+            weight: CanvasEdge.EdgeWeight(rawValue: r.weight) ?? .normal
+        )
     }
 
     private static func fromGroupRecord(_ r: CanvasGroupRecord) -> CanvasGroup {
