@@ -7,13 +7,17 @@ struct ChatView: View {
     @FocusState private var inputFocused: Bool
     @State private var dragOver = false
     @State private var livePulse = false
+    @State private var sidebarCollapsed = false
 
     var body: some View {
         HStack(spacing: 0) {
-            sidebar
-                .frame(width: 220)
+            if !sidebarCollapsed {
+                sidebar
+                    .frame(width: 220)
+                    .transition(.move(edge: .leading).combined(with: .opacity))
 
-            Divider()
+                Divider()
+            }
 
             if viewModel.contentMode == .chat {
                 chatContent
@@ -23,6 +27,25 @@ struct ChatView: View {
                     loadMessages: { viewModel.loadMessagesForCanvas(chatId: $0) },
                     orchestrator: viewModel.canvasOrchestrator
                 )
+            }
+        }
+        .overlay(alignment: .topLeading) {
+            if sidebarCollapsed {
+                Button(action: {
+                    withAnimation(Motion.snappy) { sidebarCollapsed = false }
+                }) {
+                    Image(systemName: "sidebar.left")
+                        .font(.caption)
+                        .foregroundStyle(MacbotDS.Colors.textSec)
+                        .padding(8)
+                        .background(MacbotDS.Mat.chrome)
+                        .clipShape(RoundedRectangle(cornerRadius: MacbotDS.Radius.sm, style: .continuous))
+                        .shadow(color: .black.opacity(0.1), radius: 4, y: 2)
+                }
+                .buttonStyle(.plain)
+                .help("Show sidebar")
+                .padding(MacbotDS.Space.sm)
+                .transition(.opacity)
             }
         }
         .background(MacbotDS.Colors.bg)
@@ -36,6 +59,16 @@ struct ChatView: View {
         VStack(alignment: .leading, spacing: 0) {
             // Header
             HStack(spacing: MacbotDS.Space.sm) {
+                Button(action: {
+                    withAnimation(Motion.snappy) { sidebarCollapsed = true }
+                }) {
+                    Image(systemName: "sidebar.left")
+                        .font(.caption)
+                        .foregroundStyle(MacbotDS.Colors.textTer)
+                }
+                .buttonStyle(.plain)
+                .help("Collapse sidebar")
+
                 Image(systemName: "cube.transparent")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.primary)
