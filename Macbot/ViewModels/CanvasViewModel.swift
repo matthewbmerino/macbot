@@ -43,6 +43,27 @@ final class CanvasViewModel {
     /// The 3D node currently "entered" for interactive camera control.
     var entered3DNodeId: UUID?
 
+    /// Node open in full-window editor.
+    var fullEditorNodeId: UUID?
+    var fullEditorText: String = ""
+
+    func openFullEditor(nodeId: UUID) {
+        guard let node = nodes.first(where: { $0.id == nodeId }) else { return }
+        fullEditorNodeId = nodeId
+        fullEditorText = node.text
+    }
+
+    func closeFullEditor(save: Bool = true) {
+        if save, let id = fullEditorNodeId,
+           let idx = nodes.firstIndex(where: { $0.id == id }) {
+            pushUndo()
+            nodes[idx].text = fullEditorText
+            scheduleSave()
+        }
+        fullEditorNodeId = nil
+        fullEditorText = ""
+    }
+
     func enter3DNode(id: UUID) {
         entered3DNodeId = id
     }
