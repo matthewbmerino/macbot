@@ -11,7 +11,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/platform-macOS_15+-000?logo=apple" alt="macOS 15+">
   <img src="https://img.shields.io/badge/Swift-6.0-F05138?logo=swift&logoColor=white" alt="Swift 6">
-  <img src="https://img.shields.io/badge/license-BSL_1.1-blue" alt="BSL 1.1">
+  <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT">
 </p>
 
 ## Download
@@ -136,4 +136,4 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for technical details.
 
 ## License
 
-[Business Source License 1.1](LICENSE) — free for personal/non-commercial use. Commercial use requires a license from the author. Converts to MIT on 2030-04-13.
+[MIT](LICENSE)
