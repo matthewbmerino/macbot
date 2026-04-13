@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import MarkdownUI
 
 struct CanvasView: View {
     @Bindable var viewModel: CanvasViewModel
@@ -110,6 +111,40 @@ struct CanvasView: View {
                 default:
                     return .ignored
                 }
+            }
+            // Quick add shortcuts (only when not editing)
+            .onKeyPress(characters: CharacterSet(charactersIn: "ntre/")) { press in
+                guard viewModel.editingNodeId == nil else { return .ignored }
+                guard !press.modifiers.contains(.command) else { return .ignored }
+                switch press.characters {
+                case "n": quickAdd(color: .note); return .handled
+                case "t": quickAdd(color: .task); return .handled
+                case "r": quickAdd(color: .reference); return .handled
+                case "e":
+                    viewModel.edgeModeActive.toggle()
+                    return .handled
+                case "/":
+                    withAnimation(Motion.snappy) { showAIBar = true }
+                    return .handled
+                default: return .ignored
+                }
+            }
+            // Escape cascade: edge mode → AI bar → chat → deselect
+            .onKeyPress(.escape) {
+                if viewModel.edgeModeActive {
+                    viewModel.edgeModeActive = false
+                    viewModel.pendingEdgeFromId = nil
+                } else if showAIBar {
+                    withAnimation(Motion.snappy) { showAIBar = false }
+                } else if viewModel.showCanvasChat {
+                    withAnimation(Motion.snappy) {
+                        viewModel.showCanvasChat = false
+                        viewModel.chatAnchorNodeId = nil
+                    }
+                } else {
+                    viewModel.clearSelection()
+                }
+                return .handled
             }
             .dropDestination(for: ChatDragItem.self) { items, location in
                 handleChatDrop(items: items, at: location)
@@ -828,41 +863,38 @@ struct CanvasView: View {
     // MARK: - Toolbar
 
     private var canvasToolbar: some View {
+        VStack(spacing: MacbotDS.Space.sm) {
+            // Contextual selection bar — appears when nodes are selected
+            if !viewModel.selectedIds.isEmpty {
+                contextualSelectionBar
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+
+            // Primary toolbar
+            primaryToolbar
+        }
+        .padding(.bottom, MacbotDS.Space.md)
+    }
+
+    private var primaryToolbar: some View {
         HStack(spacing: MacbotDS.Space.sm) {
-            // Canvas picker
             canvasPickerButton
 
             Divider().frame(height: 18)
 
-            toolbarButton("plus", help: "Add Note") {
-                let center = viewModel.viewToCanvas(CGPoint(x: 400, y: 300))
-                let jittered = CGPoint(
-                    x: center.x + CGFloat.random(in: -30...30),
-                    y: center.y + CGFloat.random(in: -30...30)
-                )
-                viewModel.addNode(at: jittered)
+            // Quick Add — split button with type presets
+            quickAddButton
+
+            // Edge mode toggle
+            toolbarToggle("point.forward.to.point.capsulepath.fill",
+                          help: "Edge Mode (E)",
+                          isActive: viewModel.edgeModeActive) {
+                viewModel.edgeModeActive.toggle()
             }
 
             Divider().frame(height: 18)
 
-            toolbarButton("paintpalette", help: "Cycle Color") {
-                for id in viewModel.selectedIds { viewModel.cycleColor(id: id) }
-            }
-            .disabled(viewModel.selectedIds.isEmpty)
-
-            toolbarButton("rectangle.3.group", help: "Group Selected") {
-                viewModel.groupFromSelection()
-            }
-            .disabled(viewModel.selectedIds.count < 2)
-
-            toolbarButton("trash", help: "Delete Selected") {
-                viewModel.deleteSelected()
-            }
-            .disabled(viewModel.selectedIds.isEmpty)
-
-            Divider().frame(height: 18)
-
-            toolbarButton("sparkles", help: "Ask AI") {
+            toolbarButton("sparkles", help: "Ask AI (/)") {
                 withAnimation(Motion.snappy) { showAIBar.toggle() }
             }
             .disabled(viewModel.selectedIds.isEmpty)
@@ -873,20 +905,35 @@ struct CanvasView: View {
 
             Divider().frame(height: 18)
 
-            toolbarButton("arrow.up.left.and.arrow.down.right", help: "Reset View") {
+            // Zoom controls
+            toolbarButton("minus.magnifyingglass", help: "Zoom Out (-)") {
+                withAnimation(Motion.snappy) { viewModel.zoom(by: 0.8, anchor: viewCenter) }
+            }
+
+            Button(action: {
                 withAnimation(Motion.smooth) {
                     viewModel.offset = .zero
                     viewModel.lastCommittedOffset = .zero
                     viewModel.scale = 1.0
                     viewModel.lastCommittedScale = 1.0
                 }
+            }) {
+                Text("\(Int(viewModel.scale * 100))%")
+                    .font(MacbotDS.Typo.detail)
+                    .foregroundStyle(MacbotDS.Colors.textSec)
+                    .monospacedDigit()
+                    .frame(width: 40)
+            }
+            .buttonStyle(.plain)
+            .help("Reset zoom (Cmd+0)")
+
+            toolbarButton("plus.magnifyingglass", help: "Zoom In (+)") {
+                withAnimation(Motion.snappy) { viewModel.zoom(by: 1.25, anchor: viewCenter) }
             }
 
-            Text("\(Int(viewModel.scale * 100))%")
-                .font(MacbotDS.Typo.detail)
-                .foregroundStyle(MacbotDS.Colors.textSec)
-                .monospacedDigit()
-                .frame(width: 40)
+            toolbarButton("arrow.up.left.and.arrow.down.right", help: "Zoom to Fit (Cmd+1)") {
+                withAnimation(Motion.smooth) { viewModel.zoomToFit() }
+            }
         }
         .padding(.horizontal, MacbotDS.Space.md)
         .padding(.vertical, MacbotDS.Space.sm)
@@ -894,7 +941,149 @@ struct CanvasView: View {
         .clipShape(Capsule())
         .overlay(Capsule().stroke(MacbotDS.Colors.separator, lineWidth: 0.5))
         .shadow(color: .black.opacity(0.15), radius: 16, y: 6)
-        .padding(.bottom, MacbotDS.Space.md)
+    }
+
+    // MARK: - Contextual Selection Bar
+
+    private var contextualSelectionBar: some View {
+        HStack(spacing: MacbotDS.Space.xs) {
+            // Color picker — direct color circles
+            ForEach(CanvasNode.NodeColor.allCases, id: \.self) { color in
+                Button(action: { viewModel.setColor(color) }) {
+                    Circle()
+                        .fill(color == .note
+                              ? Color.secondary
+                              : Color(hue: color.hue, saturation: 0.5, brightness: 0.85))
+                        .frame(width: 14, height: 14)
+                        .overlay(Circle().stroke(Color.primary.opacity(0.15), lineWidth: 0.5))
+                }
+                .buttonStyle(.plain)
+                .help(color.rawValue.capitalized)
+            }
+
+            Divider().frame(height: 16)
+
+            // Width presets
+            Menu {
+                Button("Small (160)") { viewModel.resizeSelected(width: 160) }
+                Button("Medium (220)") { viewModel.resizeSelected(width: 220) }
+                Button("Large (300)") { viewModel.resizeSelected(width: 300) }
+                Button("Wide (400)") { viewModel.resizeSelected(width: 400) }
+            } label: {
+                Image(systemName: "arrow.left.and.right")
+                    .font(.caption2)
+                    .foregroundStyle(MacbotDS.Colors.textSec)
+                    .frame(width: 22, height: 20)
+            }
+            .menuStyle(.borderlessButton)
+            .frame(width: 22)
+            .help("Resize")
+
+            // Alignment (only when 2+ selected)
+            if viewModel.selectedIds.count >= 2 {
+                Divider().frame(height: 16)
+
+                Menu {
+                    Section("Align") {
+                        Button("Left") { viewModel.alignSelected(.left) }
+                        Button("Center") { viewModel.alignSelected(.centerH) }
+                        Button("Right") { viewModel.alignSelected(.right) }
+                        Divider()
+                        Button("Top") { viewModel.alignSelected(.top) }
+                        Button("Middle") { viewModel.alignSelected(.centerV) }
+                        Button("Bottom") { viewModel.alignSelected(.bottom) }
+                    }
+                    if viewModel.selectedIds.count >= 3 {
+                        Section("Distribute") {
+                            Button("Horizontally") { viewModel.distributeSelected(axis: .horizontal) }
+                            Button("Vertically") { viewModel.distributeSelected(axis: .vertical) }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "align.horizontal.left")
+                        .font(.caption2)
+                        .foregroundStyle(MacbotDS.Colors.textSec)
+                        .frame(width: 22, height: 20)
+                }
+                .menuStyle(.borderlessButton)
+                .frame(width: 22)
+                .help("Align & Distribute")
+            }
+
+            Divider().frame(height: 16)
+
+            // Group / Ungroup
+            if viewModel.selectedIds.count >= 2 {
+                toolbarSmallButton("rectangle.3.group", help: "Group (Cmd+G)") {
+                    withAnimation(Motion.snappy) { viewModel.groupFromSelection() }
+                }
+            }
+
+            // Duplicate
+            toolbarSmallButton("plus.square.on.square", help: "Duplicate (Cmd+D)") {
+                withAnimation(Motion.snappy) { viewModel.duplicateSelected() }
+            }
+
+            // Undo / Redo
+            toolbarSmallButton("arrow.uturn.backward", help: "Undo (Cmd+Z)") {
+                withAnimation(Motion.snappy) { viewModel.undo() }
+            }
+            .disabled(!viewModel.canUndo)
+
+            toolbarSmallButton("arrow.uturn.forward", help: "Redo (Cmd+Shift+Z)") {
+                withAnimation(Motion.snappy) { viewModel.redo() }
+            }
+            .disabled(!viewModel.canRedo)
+
+            Divider().frame(height: 16)
+
+            // Delete
+            toolbarSmallButton("trash", help: "Delete") {
+                withAnimation(Motion.snappy) { viewModel.deleteSelected() }
+            }
+
+            // Selection count
+            Text("\(viewModel.selectedIds.count) selected")
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(MacbotDS.Colors.textTer)
+        }
+        .padding(.horizontal, MacbotDS.Space.md)
+        .padding(.vertical, 6)
+        .background(MacbotDS.Mat.chrome)
+        .clipShape(Capsule())
+        .overlay(Capsule().stroke(MacbotDS.Colors.separator, lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.1), radius: 8, y: 4)
+    }
+
+    // MARK: - Quick Add
+
+    private var quickAddButton: some View {
+        Menu {
+            Button("Note") { quickAdd(color: .note) }
+                .keyboardShortcut("n", modifiers: [])
+            Button("Idea") { quickAdd(color: .idea) }
+            Button("Task") { quickAdd(color: .task) }
+            Button("Reference") { quickAdd(color: .reference) }
+        } label: {
+            Image(systemName: "plus")
+                .font(.subheadline)
+                .foregroundStyle(MacbotDS.Colors.textSec)
+                .frame(width: 28, height: 28)
+        }
+        .menuStyle(.borderlessButton)
+        .frame(width: 28)
+        .help("Add Node")
+    }
+
+    private func quickAdd(color: CanvasNode.NodeColor) {
+        let center = viewModel.viewToCanvas(viewCenter)
+        let jittered = CGPoint(
+            x: center.x + CGFloat.random(in: -30...30),
+            y: center.y + CGFloat.random(in: -30...30)
+        )
+        withAnimation(Motion.snappy) {
+            viewModel.addNode(at: jittered, color: color)
+        }
     }
 
     // MARK: - Canvas Picker
@@ -1090,6 +1279,32 @@ struct CanvasView: View {
         .buttonStyle(.plain)
         .help(help)
     }
+
+    private func toolbarSmallButton(_ icon: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.caption2)
+                .foregroundStyle(MacbotDS.Colors.textSec)
+                .frame(width: 22, height: 20)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+
+    private func toolbarToggle(_ icon: String, help: String, isActive: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.subheadline)
+                .foregroundStyle(isActive ? MacbotDS.Colors.accent : MacbotDS.Colors.textSec)
+                .frame(width: 28, height: 28)
+                .background(isActive ? MacbotDS.Colors.accent.opacity(0.12) : .clear)
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
 }
 
 // MARK: - Edge Label Editor
@@ -1234,10 +1449,26 @@ struct CanvasNodeView: View {
                         .font(.caption)
                         .foregroundStyle(MacbotDS.Colors.textTer)
                         .italic()
-                } else {
+                } else if isAIStreaming {
+                    // Plain text during streaming — avoid expensive Markdown parsing
                     Text(node.text)
                         .font(.caption)
                         .foregroundStyle(MacbotDS.Colors.textPri)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    // Rendered Markdown for display
+                    Markdown(node.text)
+                        .markdownTextStyle {
+                            FontSize(11)
+                            ForegroundColor(MacbotDS.Colors.textPri)
+                        }
+                        .markdownBlockStyle(\.codeBlock) { configuration in
+                            configuration.label
+                                .padding(MacbotDS.Space.sm)
+                                .background(.fill.quaternary)
+                                .clipShape(RoundedRectangle(cornerRadius: MacbotDS.Radius.sm, style: .continuous))
+                        }
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
                 }

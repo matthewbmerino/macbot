@@ -36,6 +36,10 @@ final class CanvasViewModel {
     var pendingEdgeFromId: UUID?
     var pendingEdgeEnd: CGPoint = .zero
 
+    /// Edge creation mode — click node to start, click another to connect.
+    var edgeModeActive = false
+    var showMinimap = false
+
     // MARK: - Chat browser
 
     var showChatBrowser = false
@@ -514,6 +518,89 @@ final class CanvasViewModel {
             nodes[i].groupId = nil
         }
         groups.removeAll { $0.id == id }
+        scheduleSave()
+    }
+
+    // MARK: - Color & Resize
+
+    func setColor(_ color: CanvasNode.NodeColor) {
+        pushUndo()
+        for id in selectedIds {
+            if let idx = nodes.firstIndex(where: { $0.id == id }) {
+                nodes[idx].color = color
+            }
+        }
+        scheduleSave()
+    }
+
+    func resizeSelected(width: CGFloat) {
+        pushUndo()
+        let clamped = max(120, min(width, 500))
+        for id in selectedIds {
+            if let idx = nodes.firstIndex(where: { $0.id == id }) {
+                nodes[idx].width = clamped
+            }
+        }
+        scheduleSave()
+    }
+
+    // MARK: - Alignment & Distribution
+
+    enum CanvasAlignment { case left, centerH, right, top, centerV, bottom }
+
+    func alignSelected(_ alignment: CanvasAlignment) {
+        let selected = nodes.filter { selectedIds.contains($0.id) }
+        guard selected.count >= 2 else { return }
+        pushUndo()
+
+        let target: CGFloat
+        switch alignment {
+        case .left:    target = selected.map(\.position.x).min()!
+        case .centerH: target = selected.map(\.position.x).reduce(0, +) / CGFloat(selected.count)
+        case .right:   target = selected.map(\.position.x).max()!
+        case .top:     target = selected.map(\.position.y).min()!
+        case .centerV: target = selected.map(\.position.y).reduce(0, +) / CGFloat(selected.count)
+        case .bottom:  target = selected.map(\.position.y).max()!
+        }
+
+        for id in selectedIds {
+            guard let idx = nodes.firstIndex(where: { $0.id == id }) else { continue }
+            switch alignment {
+            case .left, .centerH, .right: nodes[idx].position.x = target
+            case .top, .centerV, .bottom: nodes[idx].position.y = target
+            }
+        }
+        scheduleSave()
+    }
+
+    func distributeSelected(axis: Axis) {
+        let selected = nodes.filter { selectedIds.contains($0.id) }
+        guard selected.count >= 3 else { return }
+        pushUndo()
+
+        let sorted: [CanvasNode]
+        let minVal: CGFloat
+        let maxVal: CGFloat
+
+        switch axis {
+        case .horizontal:
+            sorted = selected.sorted { $0.position.x < $1.position.x }
+            minVal = sorted.first!.position.x
+            maxVal = sorted.last!.position.x
+        case .vertical:
+            sorted = selected.sorted { $0.position.y < $1.position.y }
+            minVal = sorted.first!.position.y
+            maxVal = sorted.last!.position.y
+        }
+
+        let spacing = (maxVal - minVal) / CGFloat(sorted.count - 1)
+        for (i, node) in sorted.enumerated() {
+            guard let idx = nodes.firstIndex(where: { $0.id == node.id }) else { continue }
+            switch axis {
+            case .horizontal: nodes[idx].position.x = minVal + CGFloat(i) * spacing
+            case .vertical:   nodes[idx].position.y = minVal + CGFloat(i) * spacing
+            }
+        }
         scheduleSave()
     }
 
