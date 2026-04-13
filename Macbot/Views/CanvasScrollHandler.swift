@@ -8,12 +8,14 @@ struct CanvasScrollHandler: NSViewRepresentable {
     var onPan: (CGFloat, CGFloat) -> Void
     var onZoom: (CGFloat, CGPoint) -> Void
     var onSpacebarChanged: (Bool) -> Void
+    var onMouseMoved: (CGPoint) -> Void
 
     func makeNSView(context: Context) -> CanvasScrollNSView {
         let view = CanvasScrollNSView()
         view.onPan = onPan
         view.onZoom = onZoom
         view.onSpacebarChanged = onSpacebarChanged
+        view.onMouseMoved = onMouseMoved
         return view
     }
 
@@ -21,6 +23,7 @@ struct CanvasScrollHandler: NSViewRepresentable {
         nsView.onPan = onPan
         nsView.onZoom = onZoom
         nsView.onSpacebarChanged = onSpacebarChanged
+        nsView.onMouseMoved = onMouseMoved
     }
 }
 
@@ -32,6 +35,7 @@ final class CanvasScrollNSView: NSView {
     var onPan: ((CGFloat, CGFloat) -> Void)?
     var onZoom: ((CGFloat, CGPoint) -> Void)?
     var onSpacebarChanged: ((Bool) -> Void)?
+    var onMouseMoved: ((CGPoint) -> Void)?
 
     private var flagsMonitor: Any?
     private var spaceDownMonitor: Any?
@@ -79,6 +83,26 @@ final class CanvasScrollNSView: NSView {
     private func isFirstResponderTextField() -> Bool {
         guard let responder = window?.firstResponder else { return false }
         return responder is NSTextView || responder is NSTextField
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas { removeTrackingArea(area) }
+        addTrackingArea(NSTrackingArea(
+            rect: bounds,
+            options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect],
+            owner: self
+        ))
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        let location = convert(event.locationInWindow, from: nil)
+        onMouseMoved?(location)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        let location = convert(event.locationInWindow, from: nil)
+        onMouseMoved?(location)
     }
 
     deinit {

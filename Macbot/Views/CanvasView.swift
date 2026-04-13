@@ -231,6 +231,11 @@ struct CanvasView: View {
                     },
                     onSpacebarChanged: { down in
                         viewModel.isSpacebarDown = down
+                    },
+                    onMouseMoved: { point in
+                        if viewModel.pendingEdgeFromId != nil {
+                            viewModel.pendingEdgeEnd = point
+                        }
                     }
                 )
             }
@@ -244,6 +249,7 @@ struct CanvasView: View {
                 }
             }
             .onTapGesture(count: 1) { _ in
+                viewModel.pendingEdgeFromId = nil
                 viewModel.clearSelection()
                 showAIBar = false
             }
@@ -711,10 +717,19 @@ struct CanvasView: View {
             .onEnded { value in
                 let dist = hypot(value.translation.width, value.translation.height)
                 if dist <= 4 {
-                    // This was a click, not a drag — handle selection
-                    let exclusive = !NSEvent.modifierFlags.contains(.command)
-                        && !NSEvent.modifierFlags.contains(.shift)
-                    viewModel.select(node.id, exclusive: exclusive)
+                    // This was a click, not a drag
+                    if viewModel.pendingEdgeFromId != nil {
+                        // Complete the pending edge to this node
+                        viewModel.commitEdge(toId: node.id)
+                    } else if viewModel.edgeModeActive {
+                        // Edge mode: start a new edge from this node
+                        viewModel.pendingEdgeFromId = node.id
+                    } else {
+                        // Normal selection
+                        let exclusive = !NSEvent.modifierFlags.contains(.command)
+                            && !NSEvent.modifierFlags.contains(.shift)
+                        viewModel.select(node.id, exclusive: exclusive)
+                    }
                 } else {
                     viewModel.commitMove()
                     if viewModel.pendingEdgeFromId != nil {
