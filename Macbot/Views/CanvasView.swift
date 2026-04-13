@@ -8,6 +8,8 @@ struct CanvasView: View {
     var orchestrator: Orchestrator?
     @State private var aiPromptText = ""
     @State private var showAIBar = false
+    @State private var isRenamingCanvas = false
+    @State private var canvasRenameText = ""
 
     /// Center of the canvas viewport in view coordinates (for keyboard zoom).
     private var viewCenter: CGPoint {
@@ -1176,34 +1178,66 @@ struct CanvasView: View {
     // MARK: - Canvas Picker
 
     private var canvasPickerButton: some View {
-        Menu {
-            ForEach(viewModel.canvasList) { canvas in
-                Button(action: { viewModel.switchCanvas(canvas.id) }) {
-                    HStack {
-                        Text(canvas.title)
-                        if canvas.id == viewModel.currentCanvasId {
-                            Image(systemName: "checkmark")
+        Group {
+            if isRenamingCanvas {
+                HStack(spacing: MacbotDS.Space.xs) {
+                    TextField("Canvas name", text: $canvasRenameText)
+                        .textFieldStyle(.plain)
+                        .font(MacbotDS.Typo.detail)
+                        .foregroundStyle(MacbotDS.Colors.textPri)
+                        .frame(width: 120)
+                        .onSubmit {
+                            if let id = viewModel.currentCanvasId, !canvasRenameText.isEmpty {
+                                viewModel.renameCanvas(id, title: canvasRenameText)
+                            }
+                            isRenamingCanvas = false
+                        }
+                        .onKeyPress(.escape) {
+                            isRenamingCanvas = false
+                            return .handled
+                        }
+                }
+            } else {
+                Menu {
+                    ForEach(viewModel.canvasList) { canvas in
+                        Button(action: { viewModel.switchCanvas(canvas.id) }) {
+                            HStack {
+                                Text(canvas.title)
+                                if canvas.id == viewModel.currentCanvasId {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
                         }
                     }
+                    Divider()
+                    Button("New Canvas") { viewModel.createCanvas() }
+                    Button("Rename Canvas") {
+                        let title = viewModel.canvasList.first(where: { $0.id == viewModel.currentCanvasId })?.title ?? ""
+                        canvasRenameText = title
+                        isRenamingCanvas = true
+                    }
+                    if viewModel.canvasList.count > 1, let id = viewModel.currentCanvasId {
+                        Button("Delete Canvas", role: .destructive) {
+                            viewModel.deleteCanvas(id)
+                        }
+                    }
+                } label: {
+                    HStack(spacing: MacbotDS.Space.xs) {
+                        Image(systemName: "rectangle.on.rectangle.angled")
+                            .font(.caption2)
+                        let title = viewModel.canvasList.first(where: { $0.id == viewModel.currentCanvasId })?.title ?? "Canvas"
+                        Text(title)
+                            .font(MacbotDS.Typo.detail)
+                            .lineLimit(1)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 8))
+                    }
+                    .foregroundStyle(MacbotDS.Colors.textSec)
                 }
+                .menuStyle(.borderlessButton)
+                .frame(maxWidth: 140)
             }
-            Divider()
-            Button("New Canvas") { viewModel.createCanvas() }
-        } label: {
-            HStack(spacing: MacbotDS.Space.xs) {
-                Image(systemName: "rectangle.on.rectangle.angled")
-                    .font(.caption2)
-                let title = viewModel.canvasList.first(where: { $0.id == viewModel.currentCanvasId })?.title ?? "Canvas"
-                Text(title)
-                    .font(MacbotDS.Typo.detail)
-                    .lineLimit(1)
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 8))
-            }
-            .foregroundStyle(MacbotDS.Colors.textSec)
         }
-        .menuStyle(.borderlessButton)
-        .frame(maxWidth: 120)
     }
 
     // MARK: - Chat Browser Panel
