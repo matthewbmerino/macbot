@@ -164,32 +164,30 @@ struct ChatView: View {
     private func chatRow(_ chat: ChatRecord) -> some View {
         let isSelected = viewModel.currentChatId == chat.id
 
-        return Button(action: { viewModel.selectChat(chat.id) }) {
-            VStack(alignment: .leading, spacing: MacbotDS.Space.xs) {
-                Text(chat.title)
-                    .font(.caption.weight(isSelected ? .semibold : .regular))
-                    .foregroundStyle(isSelected ? MacbotDS.Colors.textPri : MacbotDS.Colors.textSec)
-                    .lineLimit(1)
+        return VStack(alignment: .leading, spacing: MacbotDS.Space.xs) {
+            Text(chat.title)
+                .font(.caption.weight(isSelected ? .semibold : .regular))
+                .foregroundStyle(isSelected ? MacbotDS.Colors.textPri : MacbotDS.Colors.textSec)
+                .lineLimit(1)
 
-                HStack {
-                    Text(chat.lastMessage)
-                        .font(.caption2)
-                        .foregroundStyle(MacbotDS.Colors.textTer)
-                        .lineLimit(1)
-                    Spacer()
-                    Text(chat.updatedAt, style: .relative)
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(MacbotDS.Colors.textTer)
-                }
+            HStack {
+                Text(chat.lastMessage)
+                    .font(.caption2)
+                    .foregroundStyle(MacbotDS.Colors.textTer)
+                    .lineLimit(1)
+                Spacer()
+                Text(chat.updatedAt, style: .relative)
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(MacbotDS.Colors.textTer)
             }
-            .padding(.horizontal, MacbotDS.Space.md)
-            .padding(.vertical, MacbotDS.Space.sm)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(isSelected ? AnyShapeStyle(.fill.secondary) : AnyShapeStyle(.clear))
-            .clipShape(RoundedRectangle(cornerRadius: MacbotDS.Radius.sm, style: .continuous))
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, MacbotDS.Space.md)
+        .padding(.vertical, MacbotDS.Space.sm)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(isSelected ? AnyShapeStyle(.fill.secondary) : AnyShapeStyle(.clear))
+        .clipShape(RoundedRectangle(cornerRadius: MacbotDS.Radius.sm, style: .continuous))
+        .contentShape(Rectangle())
+        .onTapGesture { viewModel.selectChat(chat.id) }
         .draggable(ChatDragItem(chatId: chat.id, chatTitle: chat.title))
         .padding(.horizontal, MacbotDS.Space.sm)
         .contextMenu {

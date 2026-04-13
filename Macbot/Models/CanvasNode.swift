@@ -1,5 +1,4 @@
 import Foundation
-import UniformTypeIdentifiers
 import CoreTransferable
 
 /// Where a canvas node's content originated.
@@ -128,10 +127,6 @@ struct ChatDragItem: Codable, Transferable {
     let chatTitle: String
 
     static var transferRepresentation: some TransferRepresentation {
-        CodableRepresentation(contentType: .macbotChat)
+        CodableRepresentation(contentType: .json)
     }
-}
-
-extension UTType {
-    static let macbotChat = UTType(exportedAs: "com.macbot.chat-drag")
 }
