@@ -2,6 +2,8 @@
 
 Native macOS AI assistant — private, on-device, always aware.
 
+![macbot](Assets/app.png)
+
 Built with SwiftUI and Metal. Runs models locally via [Ollama](https://ollama.com). Multi-agent orchestration, ambient context, desktop companion, and OS automation — things cloud AI can't do.
 
 ## Install
@@ -11,10 +13,10 @@ Built with SwiftUI and Metal. Runs models locally via [Ollama](https://ollama.co
 brew install ollama
 ollama serve &
 
-# 2. Pull models
-ollama pull qwen3.5:9b
-ollama pull qwen3-embedding:0.6b
-ollama pull gemma4:e4b          # vision (optional)
+# 2. Pull the base models (macbot auto-detects your hardware and
+#    recommends the right size on first launch)
+ollama pull qwen3.5:9b              # main model (18GB+ Macs)
+ollama pull qwen3-embedding:0.6b    # required for semantic search
 
 # 3. Build and run
 git clone https://github.com/matthewbmerino/macbot
@@ -23,10 +25,12 @@ cd macbot
 open macbot.app
 ```
 
-On first launch, grant **Accessibility** and **Screen Recording** in System Settings > Privacy & Security. Permissions persist across launches because macbot runs as a signed `.app` bundle.
+macbot detects your Mac's chip and RAM on first launch and selects the best model tier automatically — from `qwen3.5:4b` on 8GB Macs up to `gemma4:27b` on 64GB+ machines. See the [model table](#models) below.
 
-To install permanently:
+Grant **Accessibility** and **Screen Recording** in System Settings > Privacy & Security when prompted. Permissions persist across launches.
+
 ```bash
+# Install to Applications (optional)
 cp -R macbot.app /Applications/
 ```
 

@@ -110,16 +110,39 @@ enum AccessibilityBridge {
         up?.post(tap: .cgSessionEventTap)
     }
 
+    /// Type text by pasting from clipboard. This is dramatically more
+    /// reliable than character-by-character CGEvent injection, which
+    /// glitches in Safari and many other apps. The user's clipboard is
+    /// saved and restored after pasting.
     static func typeText(_ text: String) {
-        for char in text {
-            let str = String(char)
-            guard let event = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true) else { continue }
-            let chars = Array(str.utf16)
-            event.keyboardSetUnicodeString(stringLength: chars.count, unicodeString: chars)
-            event.post(tap: .cgSessionEventTap)
-            let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false)
-            up?.post(tap: .cgSessionEventTap)
-            usleep(20_000) // 20ms per character
+        let pb = NSPasteboard.general
+
+        // Save the user's current clipboard
+        let savedTypes = pb.types
+        var savedItems: [NSPasteboardItem] = []
+        for item in pb.pasteboardItems ?? [] {
+            let copy = NSPasteboardItem()
+            for type in item.types {
+                if let data = item.data(forType: type) {
+                    copy.setData(data, forType: type)
+                }
+            }
+            savedItems.append(copy)
+        }
+
+        // Put our text on the clipboard
+        pb.clearContents()
+        pb.setString(text, forType: .string)
+
+        // Cmd+V to paste
+        usleep(50_000)  // 50ms for pasteboard to settle
+        performKeyPress("Cmd+v")
+        usleep(100_000) // 100ms for paste to complete
+
+        // Restore the user's clipboard
+        pb.clearContents()
+        if !savedItems.isEmpty {
+            pb.writeObjects(savedItems)
         }
     }
 

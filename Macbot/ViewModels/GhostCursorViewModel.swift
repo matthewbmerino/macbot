@@ -23,12 +23,9 @@ final class GhostCursorViewModel {
     func cancel() {
         isCancelled = true
         isRunning = false
-        narration = "Cancelled by user."
+        narration = "Cancelled."
     }
 
-    /// Execute a task described in natural language. For MVP, we parse a simple
-    /// JSON-like format from the orchestrator. The caller provides steps directly
-    /// so this layer stays orchestrator-agnostic.
     func execute(parsedSteps: [GhostStep]) async {
         guard AccessibilityBridge.checkAccessibilityPermission() else {
             narration = "Accessibility permission required. Opening System Settings..."
@@ -55,8 +52,8 @@ final class GhostCursorViewModel {
                 break
             }
 
-            // Brief pause between steps for visual clarity
-            try? await Task.sleep(for: .milliseconds(200))
+            // Pause between steps for visual clarity
+            try? await Task.sleep(for: .milliseconds(300))
         }
 
         if !isCancelled && steps.allSatisfy({ $0.status == .completed }) {
@@ -76,18 +73,21 @@ final class GhostCursorViewModel {
             return await executeClick(app: step.app, label: elementLabel)
 
         case .type(let text):
-            await animateToCurrentField(app: step.app)
-            try? await Task.sleep(for: .milliseconds(100))
+            // Make sure the target app is focused before typing
+            await focusApp(step.app)
+            try? await Task.sleep(for: .milliseconds(200))
             AccessibilityBridge.typeText(text)
             return true
 
         case .menu(let path):
+            await focusApp(step.app)
+            try? await Task.sleep(for: .milliseconds(200))
             return AccessibilityBridge.navigateMenu(app: step.app, path: path)
 
         case .shortcut(let keys):
             guard !keys.isEmpty else { return true }
-            focusApp(step.app)
-            try? await Task.sleep(for: .milliseconds(300))
+            await focusApp(step.app)
+            try? await Task.sleep(for: .milliseconds(200))
             AccessibilityBridge.performKeyPress(keys)
             return true
 
@@ -100,48 +100,41 @@ final class GhostCursorViewModel {
         }
     }
 
+    // MARK: - App Management
+
     private func openApp(_ name: String) async -> Bool {
         // Try to activate if already running
         if let app = NSWorkspace.shared.runningApplications.first(where: {
             $0.localizedName?.lowercased() == name.lowercased()
         }) {
             app.activate()
-            // Wait until it's actually frontmost
-            let deadline = Date().addingTimeInterval(2.0)
-            while Date() < deadline {
-                if NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier {
-                    break
-                }
-                Thread.sleep(forTimeInterval: 0.05)
-            }
+            await waitForFrontmost(pid: app.processIdentifier)
             return true
         }
 
         // Launch via NSWorkspace
         let config = NSWorkspace.OpenConfiguration()
         config.activates = true
+
+        let paths = [
+            "/Applications/\(name).app",
+            "/System/Applications/\(name).app",
+            "/System/Applications/Utilities/\(name).app",
+            "/Applications/Utilities/\(name).app",
+        ]
+
+        guard let path = paths.first(where: { FileManager.default.fileExists(atPath: $0) }) else {
+            narration = "Could not find app: \(name)"
+            return false
+        }
+
         do {
-            // Try the app name directly, then with .app suffix
-            let appURL: URL
-            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: name.lowercased()) {
-                appURL = url
-            } else if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.\(name)") {
-                appURL = url
-            } else {
-                // Fallback: try opening by name via /Applications
-                let paths = [
-                    "/Applications/\(name).app",
-                    "/System/Applications/\(name).app",
-                    "/System/Applications/Utilities/\(name).app",
-                ]
-                guard let path = paths.first(where: { FileManager.default.fileExists(atPath: $0) }) else {
-                    narration = "Could not find app: \(name)"
-                    return false
-                }
-                appURL = URL(fileURLWithPath: path)
-            }
-            try await NSWorkspace.shared.openApplication(at: appURL, configuration: config)
-            try? await Task.sleep(for: .seconds(1))
+            let launched = try await NSWorkspace.shared.openApplication(
+                at: URL(fileURLWithPath: path), configuration: config
+            )
+            await waitForFrontmost(pid: launched.processIdentifier)
+            // Extra settle time for newly launched apps
+            try? await Task.sleep(for: .seconds(1.5))
             return true
         } catch {
             narration = "Failed to open \(name): \(error.localizedDescription)"
@@ -150,63 +143,63 @@ final class GhostCursorViewModel {
     }
 
     private func executeSearch(app: String, query: String) async -> Bool {
-        focusApp(app)
-        try? await Task.sleep(for: .milliseconds(300))
+        await focusApp(app)
+        // Extra time for browser to be fully ready
+        try? await Task.sleep(for: .milliseconds(500))
 
-        // Focus address/search bar with Cmd+L (works in Safari, Chrome, Arc, etc.)
-        AccessibilityBridge.performKeyPress("Cmd+L")
-        try? await Task.sleep(for: .milliseconds(300))
+        // Cmd+L focuses the address bar in all major browsers
+        AccessibilityBridge.performKeyPress("Cmd+l")
+        try? await Task.sleep(for: .milliseconds(400))
 
-        // Clear any existing text, type the query, hit Enter
-        AccessibilityBridge.performKeyPress("Cmd+A")
-        try? await Task.sleep(for: .milliseconds(50))
-        AccessibilityBridge.typeText(query)
+        // Select all existing text, then type the query
+        AccessibilityBridge.performKeyPress("Cmd+a")
         try? await Task.sleep(for: .milliseconds(100))
+
+        // Type the search query character by character
+        AccessibilityBridge.typeText(query)
+        try? await Task.sleep(for: .milliseconds(200))
+
+        // Hit Enter to search
         AccessibilityBridge.performKeyPress("return")
         return true
     }
 
     private func executeClick(app: String, label: String) async -> Bool {
-        focusApp(app)
+        await focusApp(app)
         try? await Task.sleep(for: .milliseconds(300))
 
         guard let element = AccessibilityBridge.findElement(app: app, label: label),
               let center = AccessibilityBridge.elementCenter(element) else {
-            // Fallback: element not found
             narration = "Could not find '\(label)' in \(app)"
             return false
         }
 
-        // Animate the ghost cursor to the target, then click
         await GhostCursorController.shared.animateTo(center)
         AccessibilityBridge.performClick(at: center)
         return true
     }
 
-    private func animateToCurrentField(app: String) async {
-        // Try to find the focused element to animate toward
-        focusApp(app)
-        try? await Task.sleep(for: .milliseconds(200))
-    }
+    // MARK: - Focus Management
 
-    /// Focus an app and **wait** until macOS actually brings it to the front.
-    /// Without this, keystrokes land on macbot's own window.
-    private func focusApp(_ name: String) {
+    /// Focus an app and wait until macOS confirms it's frontmost.
+    /// Uses async sleep instead of Thread.sleep to avoid blocking MainActor.
+    private func focusApp(_ name: String) async {
         guard let app = NSWorkspace.shared.runningApplications.first(where: {
             $0.localizedName?.lowercased() == name.lowercased()
         }) else { return }
 
         app.activate()
+        await waitForFrontmost(pid: app.processIdentifier)
+    }
 
-        // Poll until the app is actually frontmost (max 2 seconds).
-        // activate() is asynchronous — macOS may take 100-500ms to
-        // complete the app switch, especially if animations are on.
-        let deadline = Date().addingTimeInterval(2.0)
-        while Date() < deadline {
-            if NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier {
+    /// Poll until the given PID is the frontmost app, or timeout.
+    /// Uses async sleep so we don't block the MainActor.
+    private func waitForFrontmost(pid: pid_t) async {
+        for _ in 0..<40 {  // 40 * 50ms = 2 seconds max
+            if NSWorkspace.shared.frontmostApplication?.processIdentifier == pid {
                 return
             }
-            Thread.sleep(forTimeInterval: 0.05)
+            try? await Task.sleep(for: .milliseconds(50))
         }
     }
 }

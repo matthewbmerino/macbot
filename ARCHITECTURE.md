@@ -1,6 +1,6 @@
 # macbot Architecture
 
-This document describes the architecture of macbot-swift, a local-first
+This document describes the architecture of macbot, a local-first
 multi-agent AI assistant for macOS. macbot runs entirely on-device using
 Ollama-served models on Apple Silicon, with no cloud dependencies for
 inference.

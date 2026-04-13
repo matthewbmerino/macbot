@@ -22,14 +22,11 @@ final class GhostCursorController {
         showCursorWindow()
         showNarrationPanel()
 
-        // Resign macbot's own window so keyboard focus goes to the target app
-        NSApp.hide(nil)
-        // Brief delay for macOS to complete the hide
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            // Show the overlay windows back (they float above everything)
-            self.cursorWindow?.orderFrontRegardless()
-            self.narrationWindow?.orderFrontRegardless()
-        }
+        // Deactivate macbot so the target app can receive keyboard focus.
+        // Don't use NSApp.hide — that hides ALL our windows including
+        // the ghost cursor and narration panel. Instead, just deactivate
+        // and let the ghost ViewModel's focusApp() activate the target.
+        NSApp.deactivate()
 
         Task {
             await viewModel.execute(parsedSteps: steps)

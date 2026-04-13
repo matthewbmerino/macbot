@@ -99,12 +99,12 @@ struct SmartGreeting: View {
 
         // Contextual tip — rotates based on day/time for variety
         let tips = [
-            "Try /director to watch me work step by step.",
-            "Click the orb to chat hands-free.",
-            "Use Cmd+Shift+O to overlay me on your screen.",
-            "I can see what app you're using and help in context.",
             "Ask me about anything — code, research, your schedule.",
-            "Try /ghost to watch me control your Mac.",
+            "I can see what app you're using and help in context.",
+            "Ask me what's happening with a stock or the market.",
+            "I can read, write, and search your files.",
+            "I remember things across conversations.",
+            "Everything runs locally on this Mac.",
         ]
         // Pick a tip based on the current hour so it feels fresh
         // each time but isn't random (deterministic per hour).
