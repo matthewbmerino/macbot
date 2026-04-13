@@ -20,6 +20,9 @@ final class CanvasViewModel {
     var offset: CGSize = .zero
     var scale: CGFloat = 1.0
     var lastCommittedOffset: CGSize = .zero
+    var lastCommittedScale: CGFloat = 1.0
+    var isSpacebarDown = false
+    var viewSize: CGSize = CGSize(width: 800, height: 600)
 
     // MARK: - Selection & interaction
 
@@ -101,6 +104,7 @@ final class CanvasViewModel {
         offset = .zero
         lastCommittedOffset = .zero
         scale = 1.0
+        lastCommittedScale = 1.0
         clearSelection()
         loadCanvasList()
     }
@@ -149,6 +153,7 @@ final class CanvasViewModel {
         offset = CGSize(width: data.canvas.viewportOffsetX, height: data.canvas.viewportOffsetY)
         lastCommittedOffset = offset
         scale = data.canvas.viewportScale
+        lastCommittedScale = scale
         clearSelection()
     }
 
@@ -676,6 +681,61 @@ final class CanvasViewModel {
             self.isProcessingAI = false
             self.scheduleSave()
         }
+    }
+
+    // MARK: - Viewport control
+
+    /// Zoom by a factor, keeping the given anchor point (in view coords) fixed on screen.
+    func zoom(by factor: CGFloat, anchor: CGPoint) {
+        let newScale = min(max(scale * factor, 0.15), 5.0)
+        // The anchor point maps to a canvas point. After zoom, that canvas point
+        // must still project to the same view-space anchor.
+        // canvasPoint = (anchor - offset) / scale
+        // newOffset   = anchor - canvasPoint * newScale
+        let canvasPoint = CGPoint(
+            x: (anchor.x - offset.width) / scale,
+            y: (anchor.y - offset.height) / scale
+        )
+        offset = CGSize(
+            width: anchor.x - canvasPoint.x * newScale,
+            height: anchor.y - canvasPoint.y * newScale
+        )
+        scale = newScale
+        lastCommittedOffset = offset
+        lastCommittedScale = scale
+    }
+
+    /// Handle trackpad two-finger pan (includes momentum events from macOS).
+    func handleTrackpadPan(deltaX: CGFloat, deltaY: CGFloat) {
+        offset.width += deltaX
+        offset.height += deltaY
+        lastCommittedOffset = offset
+    }
+
+    /// Zoom to fit all nodes in the viewport.
+    func zoomToFit() {
+        guard !nodes.isEmpty else { return }
+        let padding: CGFloat = 60
+        let minX = nodes.map(\.position.x).min()! - padding
+        let maxX = nodes.map { $0.position.x + $0.width }.max()! + padding
+        let minY = nodes.map(\.position.y).min()! - padding
+        let maxY = nodes.map(\.position.y).max()! + padding
+
+        let contentW = maxX - minX
+        let contentH = maxY - minY
+        guard contentW > 0, contentH > 0 else { return }
+
+        let fitScale = min(viewSize.width / contentW, viewSize.height / contentH, 2.0)
+        let centerX = (minX + maxX) / 2
+        let centerY = (minY + maxY) / 2
+
+        scale = fitScale
+        lastCommittedScale = fitScale
+        offset = CGSize(
+            width: viewSize.width / 2 - centerX * fitScale,
+            height: viewSize.height / 2 - centerY * fitScale
+        )
+        lastCommittedOffset = offset
     }
 
     // MARK: - Coordinate conversion

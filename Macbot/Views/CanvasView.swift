@@ -8,6 +8,11 @@ struct CanvasView: View {
     @State private var aiPromptText = ""
     @State private var showAIBar = false
 
+    /// Center of the canvas viewport in view coordinates (for keyboard zoom).
+    private var viewCenter: CGPoint {
+        CGPoint(x: viewModel.viewSize.width / 2, y: viewModel.viewSize.height / 2)
+    }
+
     var body: some View {
         HStack(spacing: 0) {
             ZStack {
@@ -37,8 +42,55 @@ struct CanvasView: View {
             .clipped()
             .background(MacbotDS.Colors.bg)
             .onKeyPress(.delete) {
-                viewModel.deleteSelected()
+                withAnimation(Motion.snappy) { viewModel.deleteSelected() }
                 return .handled
+            }
+            // Spacebar hold for pan mode
+            .onKeyPress(.space, phases: .down) { _ in
+                viewModel.isSpacebarDown = true
+                return .handled
+            }
+            .onKeyPress(.space, phases: .up) { _ in
+                viewModel.isSpacebarDown = false
+                return .handled
+            }
+            // Zoom shortcuts
+            .onKeyPress(characters: CharacterSet(charactersIn: "=+")) { _ in
+                withAnimation(Motion.snappy) {
+                    viewModel.zoom(by: 1.25, anchor: viewCenter)
+                }
+                return .handled
+            }
+            .onKeyPress(characters: CharacterSet(charactersIn: "-")) { _ in
+                withAnimation(Motion.snappy) {
+                    viewModel.zoom(by: 0.8, anchor: viewCenter)
+                }
+                return .handled
+            }
+            // Cmd shortcuts — check modifier inside the handler
+            .onKeyPress(characters: CharacterSet(charactersIn: "01ag")) { press in
+                guard press.modifiers.contains(.command) else { return .ignored }
+                switch press.characters {
+                case "0":
+                    withAnimation(Motion.smooth) {
+                        viewModel.offset = .zero
+                        viewModel.lastCommittedOffset = .zero
+                        viewModel.scale = 1.0
+                        viewModel.lastCommittedScale = 1.0
+                    }
+                    return .handled
+                case "1":
+                    withAnimation(Motion.smooth) { viewModel.zoomToFit() }
+                    return .handled
+                case "a":
+                    viewModel.selectAll()
+                    return .handled
+                case "g":
+                    withAnimation(Motion.snappy) { viewModel.groupFromSelection() }
+                    return .handled
+                default:
+                    return .ignored
+                }
             }
             .dropDestination(for: ChatDragItem.self) { items, location in
                 handleChatDrop(items: items, at: location)
@@ -97,24 +149,41 @@ struct CanvasView: View {
             .allowsHitTesting(false)
     }
 
-    // MARK: - Background Grid + Gestures
+    // MARK: - Background Grid + Scroll Handler
 
     private var canvasBackground: some View {
-        GeometryReader { _ in
-            Canvas { ctx, size in
-                drawGrid(ctx: ctx, size: size)
+        GeometryReader { geo in
+            ZStack {
+                // Grid
+                Canvas { ctx, size in
+                    drawGrid(ctx: ctx, size: size)
+                }
+
+                // NSView layer for scroll wheel zoom + trackpad pan with momentum
+                CanvasScrollHandler(
+                    onPan: { dx, dy in
+                        viewModel.handleTrackpadPan(deltaX: dx, deltaY: dy)
+                    },
+                    onZoom: { factor, anchor in
+                        viewModel.zoom(by: factor, anchor: anchor)
+                    }
+                )
             }
             .contentShape(Rectangle())
-            .gesture(panGesture)
-            .gesture(zoomGesture)
+            // Spacebar + drag for pan (Figma pattern)
+            .gesture(spacebarPanGesture)
             .onTapGesture(count: 2) { location in
-                let canvasPoint = viewModel.viewToCanvas(location)
-                viewModel.addNode(at: canvasPoint)
+                withAnimation(Motion.snappy) {
+                    let canvasPoint = viewModel.viewToCanvas(location)
+                    viewModel.addNode(at: canvasPoint)
+                }
             }
             .onTapGesture(count: 1) { _ in
                 viewModel.clearSelection()
                 showAIBar = false
             }
+            .onAppear { viewModel.viewSize = geo.size }
+            .onChange(of: geo.size) { _, newSize in viewModel.viewSize = newSize }
         }
     }
 
@@ -146,9 +215,11 @@ struct CanvasView: View {
 
     // MARK: - Gestures
 
-    private var panGesture: some Gesture {
+    /// Spacebar + drag for manual panning (Figma-style).
+    private var spacebarPanGesture: some Gesture {
         DragGesture()
             .onChanged { value in
+                guard viewModel.isSpacebarDown else { return }
                 viewModel.offset = CGSize(
                     width: viewModel.lastCommittedOffset.width + value.translation.width,
                     height: viewModel.lastCommittedOffset.height + value.translation.height
@@ -156,13 +227,6 @@ struct CanvasView: View {
             }
             .onEnded { _ in
                 viewModel.lastCommittedOffset = viewModel.offset
-            }
-    }
-
-    private var zoomGesture: some Gesture {
-        MagnifyGesture()
-            .onChanged { value in
-                viewModel.scale = min(max(value.magnification, 0.25), 4.0)
             }
     }
 
@@ -313,15 +377,21 @@ struct CanvasView: View {
                 onStartEdge: { viewModel.pendingEdgeFromId = node.id }
             )
             .position(viewModel.canvasToView(node.position))
-            .scaleEffect(viewModel.scale)
+            .scaleEffect(viewModel.scale * (viewModel.draggingNodeId == node.id ? 1.03 : 1.0))
+            .shadow(
+                color: viewModel.draggingNodeId == node.id ? .black.opacity(0.18) : .clear,
+                radius: 20, y: 8
+            )
+            .animation(Motion.snappy, value: viewModel.draggingNodeId == node.id)
+            .transition(.asymmetric(
+                insertion: .scale(scale: 0.85).combined(with: .opacity),
+                removal: .scale(scale: 0.9).combined(with: .opacity)
+            ))
             .onTapGesture(count: 2) {
                 viewModel.select(node.id)
                 viewModel.editingNodeId = node.id
             }
-            .onTapGesture(count: 1) {
-                let exclusive = !NSEvent.modifierFlags.contains(.shift)
-                viewModel.select(node.id, exclusive: exclusive)
-            }
+            // Unified drag gesture — disambiguates click vs drag by distance
             .gesture(nodeDragGesture(node: node))
             .contextMenu {
                 nodeContextMenu(node: node)
@@ -411,23 +481,35 @@ struct CanvasView: View {
     }
 
     private func nodeDragGesture(node: CanvasNode) -> some Gesture {
-        DragGesture()
+        DragGesture(minimumDistance: 0)
             .onChanged { value in
-                viewModel.draggingNodeId = node.id
-                let newCanvas = viewModel.viewToCanvas(value.location)
-                viewModel.moveNode(id: node.id, to: newCanvas)
+                let dist = hypot(value.translation.width, value.translation.height)
+                // Only start dragging after 4pt of movement — avoids drag on click
+                if dist > 4 {
+                    viewModel.draggingNodeId = node.id
+                    let newCanvas = viewModel.viewToCanvas(value.location)
+                    viewModel.moveNode(id: node.id, to: newCanvas)
+                }
             }
             .onEnded { value in
-                viewModel.draggingNodeId = nil
-                viewModel.commitMove()
-                if viewModel.pendingEdgeFromId != nil {
-                    let dropPoint = viewModel.viewToCanvas(value.location)
-                    if let target = hitTest(dropPoint, excluding: node.id) {
-                        viewModel.commitEdge(toId: target.id)
-                    } else {
-                        viewModel.pendingEdgeFromId = nil
+                let dist = hypot(value.translation.width, value.translation.height)
+                if dist <= 4 {
+                    // This was a click, not a drag — handle selection
+                    let exclusive = !NSEvent.modifierFlags.contains(.command)
+                        && !NSEvent.modifierFlags.contains(.shift)
+                    viewModel.select(node.id, exclusive: exclusive)
+                } else {
+                    viewModel.commitMove()
+                    if viewModel.pendingEdgeFromId != nil {
+                        let dropPoint = viewModel.viewToCanvas(value.location)
+                        if let target = hitTest(dropPoint, excluding: node.id) {
+                            viewModel.commitEdge(toId: target.id)
+                        } else {
+                            viewModel.pendingEdgeFromId = nil
+                        }
                     }
                 }
+                viewModel.draggingNodeId = nil
             }
     }
 
@@ -632,6 +714,7 @@ struct CanvasView: View {
                     viewModel.offset = .zero
                     viewModel.lastCommittedOffset = .zero
                     viewModel.scale = 1.0
+                    viewModel.lastCommittedScale = 1.0
                 }
             }
 
