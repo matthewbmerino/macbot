@@ -75,8 +75,12 @@ struct CanvasView: View {
                 return .handled
             }
             // Cmd shortcuts
-            .onKeyPress(characters: CharacterSet(charactersIn: "01agcvxdz")) { press in
+            .onKeyPress(characters: CharacterSet(charactersIn: "01agcvxdzf")) { press in
                 guard press.modifiers.contains(.command) else { return .ignored }
+                if press.characters == "f" && press.modifiers.contains(.shift) {
+                    withAnimation(Motion.snappy) { viewModel.showSearch = true }
+                    return .handled
+                }
                 switch press.characters {
                 case "0":
                     withAnimation(Motion.smooth) {
@@ -182,10 +186,136 @@ struct CanvasView: View {
             }
         }
         .overlay {
+            if viewModel.showSearch {
+                universalSearchOverlay
+                    .transition(.opacity)
+            }
+        }
+        .overlay {
             if viewModel.fullEditorNodeId != nil {
                 fullWindowEditor
                     .transition(.opacity)
             }
+        }
+    }
+
+    // MARK: - Universal Search
+
+    @FocusState private var searchFocused: Bool
+
+    private var universalSearchOverlay: some View {
+        VStack(spacing: 0) {
+            Spacer().frame(height: 80)
+
+            VStack(spacing: 0) {
+                // Search field
+                HStack(spacing: MacbotDS.Space.sm) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.subheadline)
+                        .foregroundStyle(MacbotDS.Colors.textTer)
+
+                    TextField("Search all canvases...", text: $viewModel.searchQuery)
+                        .textFieldStyle(.plain)
+                        .font(.subheadline)
+                        .foregroundStyle(MacbotDS.Colors.textPri)
+                        .focused($searchFocused)
+                        .onAppear { searchFocused = true }
+                        .onChange(of: viewModel.searchQuery) { _, _ in viewModel.performSearch() }
+                        .onSubmit {
+                            if let first = viewModel.searchResults.first {
+                                viewModel.navigateToSearchResult(first)
+                            }
+                        }
+                        .onKeyPress(.escape) {
+                            withAnimation(Motion.snappy) {
+                                viewModel.showSearch = false
+                                viewModel.searchQuery = ""
+                                viewModel.searchResults = []
+                            }
+                            canvasFocused = true
+                            return .handled
+                        }
+
+                    if !viewModel.searchQuery.isEmpty {
+                        Button(action: {
+                            viewModel.searchQuery = ""
+                            viewModel.searchResults = []
+                        }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.caption)
+                                .foregroundStyle(MacbotDS.Colors.textTer)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, MacbotDS.Space.md)
+                .padding(.vertical, MacbotDS.Space.md)
+
+                if !viewModel.searchResults.isEmpty {
+                    Divider()
+
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 2) {
+                            ForEach(Array(viewModel.searchResults.enumerated()), id: \.offset) { _, result in
+                                Button(action: {
+                                    viewModel.navigateToSearchResult(result)
+                                    canvasFocused = true
+                                }) {
+                                    HStack(spacing: MacbotDS.Space.sm) {
+                                        Circle()
+                                            .fill(result.nodeColor == "note"
+                                                  ? Color.secondary
+                                                  : Color(hue: CanvasNode.NodeColor(rawValue: result.nodeColor)?.hue ?? 0,
+                                                          saturation: 0.5, brightness: 0.85))
+                                            .frame(width: 8, height: 8)
+
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(result.nodeText)
+                                                .font(.caption)
+                                                .foregroundStyle(MacbotDS.Colors.textPri)
+                                                .lineLimit(2)
+                                            Text(result.canvasTitle)
+                                                .font(.caption2)
+                                                .foregroundStyle(MacbotDS.Colors.textTer)
+                                        }
+                                        Spacer()
+                                    }
+                                    .padding(.horizontal, MacbotDS.Space.md)
+                                    .padding(.vertical, MacbotDS.Space.sm)
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 300)
+                } else if !viewModel.searchQuery.isEmpty {
+                    Divider()
+                    Text("No results")
+                        .font(.caption)
+                        .foregroundStyle(MacbotDS.Colors.textTer)
+                        .padding(MacbotDS.Space.md)
+                }
+            }
+            .frame(width: 420)
+            .background(MacbotDS.Mat.chrome)
+            .clipShape(RoundedRectangle(cornerRadius: MacbotDS.Radius.lg, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: MacbotDS.Radius.lg, style: .continuous)
+                    .stroke(MacbotDS.Colors.separator, lineWidth: 0.5)
+            )
+            .shadow(color: .black.opacity(0.25), radius: 24, y: 8)
+
+            Spacer()
+        }
+        .background(Color.black.opacity(0.3))
+        .onTapGesture {
+            withAnimation(Motion.snappy) {
+                viewModel.showSearch = false
+                viewModel.searchQuery = ""
+                viewModel.searchResults = []
+            }
+            canvasFocused = true
         }
     }
 

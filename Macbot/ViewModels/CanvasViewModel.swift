@@ -43,6 +43,44 @@ final class CanvasViewModel {
     /// The 3D node currently "entered" for interactive camera control.
     var entered3DNodeId: UUID?
 
+    // MARK: - Universal Search
+
+    var showSearch = false
+    var searchQuery = ""
+    var searchResults: [CanvasStore.SearchResult] = []
+
+    func performSearch() {
+        let q = searchQuery.trimmingCharacters(in: .whitespaces)
+        if q.isEmpty {
+            searchResults = []
+            return
+        }
+        searchResults = canvasStore.searchNodes(query: q)
+    }
+
+    func navigateToSearchResult(_ result: CanvasStore.SearchResult) {
+        // Switch to the canvas containing the result
+        if result.canvasId != currentCanvasId {
+            switchCanvas(result.canvasId)
+        }
+        // Select and center on the node
+        if let nodeId = UUID(uuidString: result.nodeId) {
+            selectedIds = [nodeId]
+            if let node = nodes.first(where: { $0.id == nodeId }) {
+                withAnimation(Motion.smooth) {
+                    offset = CGSize(
+                        width: viewSize.width / 2 - node.position.x * scale,
+                        height: viewSize.height / 2 - node.position.y * scale
+                    )
+                    lastCommittedOffset = offset
+                }
+            }
+        }
+        showSearch = false
+        searchQuery = ""
+        searchResults = []
+    }
+
     /// Node open in full-window editor.
     var fullEditorNodeId: UUID?
     var fullEditorText: String = ""

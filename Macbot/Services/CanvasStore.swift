@@ -132,6 +132,44 @@ final class CanvasStore {
         }
     }
 
+    // MARK: - Search
+
+    struct SearchResult {
+        let nodeId: String
+        let canvasId: String
+        let canvasTitle: String
+        let nodeText: String
+        let nodeColor: String
+    }
+
+    func searchNodes(query: String) -> [SearchResult] {
+        do {
+            return try db.read { db in
+                let rows = try Row.fetchAll(db, sql: """
+                    SELECT n.id, n.canvasId, c.title AS canvasTitle, n.text, n.color
+                    FROM canvas_nodes n
+                    JOIN canvases c ON c.id = n.canvasId
+                    WHERE n.text LIKE ?
+                    ORDER BY c.updatedAt DESC
+                    LIMIT 50
+                """, arguments: ["%\(query)%"])
+
+                return rows.map { row in
+                    SearchResult(
+                        nodeId: row["id"],
+                        canvasId: row["canvasId"],
+                        canvasTitle: row["canvasTitle"],
+                        nodeText: row["text"],
+                        nodeColor: row["color"]
+                    )
+                }
+            }
+        } catch {
+            Log.app.error("[canvas] searchNodes failed: \(error)")
+            return []
+        }
+    }
+
     // MARK: - Save / Load Full Canvas
 
     /// Save all canvas state in a single transaction. Replaces existing data.
