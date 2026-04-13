@@ -46,17 +46,8 @@ struct CanvasView: View {
                 withAnimation(Motion.snappy) { viewModel.deleteSelected() }
                 return .handled
             }
-            // Spacebar hold for pan mode
-            .onKeyPress(.space, phases: .down) { _ in
-                guard viewModel.editingNodeId == nil && !viewModel.showCanvasChat else { return .ignored }
-                viewModel.isSpacebarDown = true
-                return .handled
-            }
-            .onKeyPress(.space, phases: .up) { _ in
-                guard viewModel.isSpacebarDown else { return .ignored }
-                viewModel.isSpacebarDown = false
-                return .handled
-            }
+            // Spacebar pan mode is handled by CanvasScrollHandler's NSEvent monitor
+            // so it doesn't steal space key from text editors
             // Zoom shortcuts
             .onKeyPress(characters: CharacterSet(charactersIn: "=+")) { _ in
                 withAnimation(Motion.snappy) {
@@ -194,6 +185,9 @@ struct CanvasView: View {
                     },
                     onZoom: { factor, anchor in
                         viewModel.zoom(by: factor, anchor: anchor)
+                    },
+                    onSpacebarChanged: { down in
+                        viewModel.isSpacebarDown = down
                     }
                 )
             }

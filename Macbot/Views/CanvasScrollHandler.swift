@@ -7,17 +7,20 @@ import SwiftUI
 struct CanvasScrollHandler: NSViewRepresentable {
     var onPan: (CGFloat, CGFloat) -> Void
     var onZoom: (CGFloat, CGPoint) -> Void
+    var onSpacebarChanged: (Bool) -> Void
 
     func makeNSView(context: Context) -> CanvasScrollNSView {
         let view = CanvasScrollNSView()
         view.onPan = onPan
         view.onZoom = onZoom
+        view.onSpacebarChanged = onSpacebarChanged
         return view
     }
 
     func updateNSView(_ nsView: CanvasScrollNSView, context: Context) {
         nsView.onPan = onPan
         nsView.onZoom = onZoom
+        nsView.onSpacebarChanged = onSpacebarChanged
     }
 }
 
@@ -28,9 +31,59 @@ struct CanvasScrollHandler: NSViewRepresentable {
 final class CanvasScrollNSView: NSView {
     var onPan: ((CGFloat, CGFloat) -> Void)?
     var onZoom: ((CGFloat, CGPoint) -> Void)?
+    var onSpacebarChanged: ((Bool) -> Void)?
+
+    private var flagsMonitor: Any?
+    private var spaceDownMonitor: Any?
+    private var spaceUpMonitor: Any?
 
     override var acceptsFirstResponder: Bool { true }
     override var isFlipped: Bool { true }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil {
+            installSpacebarMonitor()
+        } else {
+            removeSpacebarMonitor()
+        }
+    }
+
+    /// Track spacebar via local event monitors. These only fire when the
+    /// app is active but do NOT steal keys from focused text fields —
+    /// we check the first responder before claiming the event.
+    private func installSpacebarMonitor() {
+        removeSpacebarMonitor()
+
+        spaceDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard event.keyCode == 49, // 49 = spacebar
+                  !event.isARepeat,
+                  self?.isFirstResponderTextField() == false else { return event }
+            self?.onSpacebarChanged?(true)
+            return nil // consume the event
+        }
+
+        spaceUpMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyUp) { [weak self] event in
+            guard event.keyCode == 49 else { return event }
+            self?.onSpacebarChanged?(false)
+            return event
+        }
+    }
+
+    private func removeSpacebarMonitor() {
+        if let m = spaceDownMonitor { NSEvent.removeMonitor(m); spaceDownMonitor = nil }
+        if let m = spaceUpMonitor { NSEvent.removeMonitor(m); spaceUpMonitor = nil }
+    }
+
+    /// Returns true if the current first responder is a text input (NSTextView, NSTextField).
+    private func isFirstResponderTextField() -> Bool {
+        guard let responder = window?.firstResponder else { return false }
+        return responder is NSTextView || responder is NSTextField
+    }
+
+    deinit {
+        removeSpacebarMonitor()
+    }
 
     override func scrollWheel(with event: NSEvent) {
         let isTrackpad = event.phase != [] || event.momentumPhase != []
