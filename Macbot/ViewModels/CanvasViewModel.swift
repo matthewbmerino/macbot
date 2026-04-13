@@ -553,17 +553,16 @@ final class CanvasViewModel {
         }
 
         // Build context from selected nodes
-        let context = selected.map { node in
-            let label = node.color.rawValue.uppercased()
-            return "[\(label)] \(node.text)"
-        }.joined(separator: "\n---\n")
+        let context = selected.map(\.text).joined(separator: "\n\n")
 
         let fullPrompt = """
-        Context from my canvas notes:
+        The user selected these notes on their canvas:
 
         \(context)
 
-        \(prompt)
+        Based on the above, \(prompt)
+
+        Respond directly with the result. Do not explain what the notes are, do not ask follow-up questions, just do it.
         """
 
         isProcessingAI = true
@@ -656,11 +655,13 @@ final class CanvasViewModel {
         chatAnchorNodeId = aiNode.id  // Next message continues from AI response
 
         let fullPrompt = """
-        Previous conversation context:
+        Previous conversation on the user's canvas:
 
         \(threadContext)
 
         User: \(text)
+
+        Respond directly. Be concise and action-oriented.
         """
 
         isProcessingAI = true
@@ -742,17 +743,16 @@ final class CanvasViewModel {
         let cy = selected.map(\.position.y).reduce(0, +) / CGFloat(selected.count)
 
         // Build context from selected nodes
-        let context = selected.map { node in
-            let label = node.color.rawValue.uppercased()
-            return "[\(label)] \(node.text)"
-        }.joined(separator: "\n---\n")
+        let context = selected.map(\.text).joined(separator: "\n\n")
 
         let fullPrompt = """
-        Context from canvas notes:
+        The user selected these notes on their canvas:
 
         \(context)
 
-        \(prompt)
+        Based on the above, \(prompt)
+
+        Respond directly with your analysis. Do not explain what the notes are, do not ask follow-up questions.
         """
 
         // Create placeholder nodes for each agent, fanned out from the centroid
