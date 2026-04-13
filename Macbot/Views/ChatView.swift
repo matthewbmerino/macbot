@@ -83,7 +83,13 @@ struct ChatView: View {
         }
         .background(MacbotDS.Colors.bg)
         .frame(minWidth: 700, minHeight: 520)
-        .onAppear { inputFocused = true }
+        .onAppear {
+            inputFocused = true
+            if viewModel.contentMode == .canvas {
+                viewModel.refreshCanvasChats()
+                viewModel.setupCanvas()
+            }
+        }
     }
 
     // MARK: - Sidebar

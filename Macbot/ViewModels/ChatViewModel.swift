@@ -21,7 +21,7 @@ enum ContentMode: String { case chat, canvas }
 @Observable
 final class ChatViewModel {
     // View mode
-    var contentMode: ContentMode = .chat
+    var contentMode: ContentMode = .canvas
     let canvasViewModel = CanvasViewModel()
 
     /// Sync the canvas chat browser with the current chat list.

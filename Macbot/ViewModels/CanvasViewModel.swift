@@ -61,6 +61,26 @@ final class CanvasViewModel {
 
     var showShortcutHelp = false
 
+    // MARK: - Landing experience
+
+    var showLanding: Bool = false
+    var landingDismissed: Bool = false
+
+    /// Check if we should show the canvas landing experience.
+    func checkLanding() {
+        if nodes.isEmpty && !landingDismissed {
+            showLanding = true
+        }
+    }
+
+    /// Dismiss the landing and mark as seen.
+    func dismissLanding() {
+        withAnimation(Motion.smooth) {
+            showLanding = false
+            landingDismissed = true
+        }
+    }
+
     // MARK: - Multi-node drag
 
     /// Positions captured at drag start for multi-node drag.

@@ -301,6 +301,15 @@ struct CanvasView: View {
                     .transition(.opacity)
             }
         }
+        .overlay {
+            if viewModel.showLanding {
+                canvasLanding
+                    .transition(.opacity)
+            }
+        }
+        .task {
+            viewModel.checkLanding()
+        }
     }
 
     // MARK: - Universal Search
@@ -2049,6 +2058,137 @@ struct CanvasView: View {
         }
         .buttonStyle(.plain)
         .help(help)
+    }
+
+    // MARK: - Canvas Landing
+
+    @State private var landingBreathScale: CGFloat = 1.0
+    @State private var landingHintsVisible: Bool = false
+    @State private var landingTitleVisible: Bool = false
+
+    private var canvasLanding: some View {
+        VStack(spacing: 0) {
+            Spacer()
+
+            VStack(spacing: MacbotDS.Space.xl) {
+                // Animated icon
+                ZStack {
+                    // Outer glow ring
+                    Circle()
+                        .stroke(MacbotDS.Colors.accent.opacity(0.15), lineWidth: 1.5)
+                        .frame(width: 100, height: 100)
+                        .scaleEffect(landingBreathScale * 1.15)
+
+                    Circle()
+                        .fill(MacbotDS.Colors.accent.opacity(0.06))
+                        .frame(width: 80, height: 80)
+                        .scaleEffect(landingBreathScale)
+
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 30, weight: .light))
+                        .foregroundStyle(MacbotDS.Colors.accent.opacity(0.7))
+                        .scaleEffect(landingBreathScale)
+                }
+                .opacity(landingTitleVisible ? 1 : 0)
+                .onAppear {
+                    withAnimation(.easeInOut(duration: 2.5).repeatForever(autoreverses: true)) {
+                        landingBreathScale = 1.06
+                    }
+                }
+
+                // Title
+                VStack(spacing: MacbotDS.Space.sm) {
+                    Text("Your canvas is ready")
+                        .font(.system(size: 22, weight: .medium, design: .rounded))
+                        .foregroundStyle(MacbotDS.Colors.textPri.opacity(0.85))
+
+                    Text("A workspace for thinking, researching, and connecting ideas.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(MacbotDS.Colors.textTer)
+                }
+                .opacity(landingTitleVisible ? 1 : 0)
+                .offset(y: landingTitleVisible ? 0 : 8)
+
+                // Action hints
+                VStack(spacing: MacbotDS.Space.md) {
+                    landingHint(icon: "plus.circle", key: "Double-click", label: "Create a note")
+                    landingHint(icon: "bolt.fill", key: "Cmd + Return", label: "Execute with AI — creates a knowledge graph")
+                    landingHint(icon: "questionmark.circle", key: "?", label: "View all keyboard shortcuts")
+                }
+                .opacity(landingHintsVisible ? 1 : 0)
+                .offset(y: landingHintsVisible ? 0 : 12)
+
+                // Start button
+                Button(action: {
+                    viewModel.dismissLanding()
+                    // Create a starter note at center
+                    let center = viewModel.viewToCanvas(viewCenter)
+                    withAnimation(Motion.snappy) {
+                        viewModel.addNode(at: center, color: .idea)
+                    }
+                }) {
+                    HStack(spacing: MacbotDS.Space.sm) {
+                        Image(systemName: "rectangle.and.pencil.and.ellipsis")
+                            .font(.system(size: 12))
+                        Text("Start Writing")
+                            .font(.system(size: 13, weight: .medium))
+                    }
+                    .foregroundStyle(MacbotDS.Colors.accent)
+                    .padding(.horizontal, MacbotDS.Space.lg)
+                    .padding(.vertical, MacbotDS.Space.md)
+                    .background(MacbotDS.Colors.accent.opacity(0.1))
+                    .clipShape(RoundedRectangle(cornerRadius: MacbotDS.Radius.sm, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: MacbotDS.Radius.sm, style: .continuous)
+                            .stroke(MacbotDS.Colors.accent.opacity(0.2), lineWidth: 1)
+                    )
+                }
+                .buttonStyle(.plain)
+                .opacity(landingHintsVisible ? 1 : 0)
+
+                // Privacy
+                HStack(spacing: MacbotDS.Space.xs) {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 8))
+                    Text("Everything runs locally on this Mac")
+                        .font(.system(size: 11))
+                }
+                .foregroundStyle(MacbotDS.Colors.textTer.opacity(0.5))
+                .opacity(landingHintsVisible ? 1 : 0)
+            }
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(MacbotDS.Colors.bg)
+        .onAppear {
+            withAnimation(.easeOut(duration: 0.6)) { landingTitleVisible = true }
+            withAnimation(.easeOut(duration: 0.6).delay(0.3)) { landingHintsVisible = true }
+        }
+        .onTapGesture(count: 2) { _ in
+            // Double-click through to create a node
+            viewModel.dismissLanding()
+            let center = viewModel.viewToCanvas(viewCenter)
+            withAnimation(Motion.snappy) { viewModel.addNode(at: center, color: .note) }
+        }
+    }
+
+    private func landingHint(icon: String, key: String, label: String) -> some View {
+        HStack(spacing: MacbotDS.Space.md) {
+            Image(systemName: icon)
+                .font(.system(size: 13))
+                .foregroundStyle(MacbotDS.Colors.accent.opacity(0.6))
+                .frame(width: 20)
+
+            Text(key)
+                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .foregroundStyle(MacbotDS.Colors.textSec)
+                .frame(width: 130, alignment: .leading)
+
+            Text(label)
+                .font(.system(size: 12))
+                .foregroundStyle(MacbotDS.Colors.textTer)
+        }
     }
 
     // MARK: - Shortcut Help Overlay

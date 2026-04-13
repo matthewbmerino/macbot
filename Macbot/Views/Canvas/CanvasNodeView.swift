@@ -246,7 +246,6 @@ struct CanvasNodeView: View {
             Text(node.text)
                 .font(.callout)
                 .foregroundStyle(MacbotDS.Colors.textPri)
-                .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
         } else {
             Markdown(node.text)
@@ -260,7 +259,6 @@ struct CanvasNodeView: View {
                         .background(.fill.quaternary)
                         .clipShape(RoundedRectangle(cornerRadius: MacbotDS.Radius.sm, style: .continuous))
                 }
-                .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
