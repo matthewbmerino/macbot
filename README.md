@@ -14,6 +14,12 @@
   <img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT">
 </p>
 
+## Download
+
+**[Download macbot.zip](https://github.com/matthewbmerino/macbot/releases/latest/download/macbot.zip)** — unzip, drag to Applications, double-click to run.
+
+> First launch: right-click the app → **Open** (required once since the app isn't notarized).
+
 ---
 
 ### Chat
@@ -84,14 +90,22 @@ macbot detects your Mac's hardware and selects the best model automatically. Gra
 | `N` `T` `R` | Add Note / Task / Reference |
 | `E` | Toggle edge mode |
 | `/` | Open AI prompt bar |
+| `?` | Keyboard shortcut help |
+| `M` | Toggle minimap |
+| `Tab` / `Shift+Tab` | Cycle through nodes |
+| `Arrow keys` | Navigate to nearest node |
+| `Cmd+V` | Paste (nodes or images) |
 | `Cmd+Z` `Cmd+Shift+Z` | Undo / Redo |
-| `Cmd+C` `Cmd+V` `Cmd+X` | Copy / Paste / Cut |
-| `Cmd+D` | Duplicate |
+| `Cmd+C` `Cmd+X` `Cmd+D` | Copy / Cut / Duplicate |
 | `Cmd+G` | Group selected |
 | `Cmd+A` | Select all |
 | `+` `-` | Zoom in / out |
-| `Cmd+0` `Cmd+1` | Reset view / Zoom to fit |
+| `Cmd+0` `Cmd+1` `Cmd+2` | Reset / Zoom to fit / Zoom to selection |
+| `Cmd+Scroll` | Zoom toward cursor |
+| `Scroll` | Pan |
 | `Space` + drag | Pan |
+| `Shift` + drag node | Snap to grid |
+| Drag empty area | Box select |
 | `Escape` | Dismiss / Deselect |
 
 ## Models
