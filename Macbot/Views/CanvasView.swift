@@ -420,7 +420,7 @@ struct CanvasView: View {
         }
     }
 
-    // MARK: - Full Window Editor
+    // MARK: - Full Window Viewer
 
     private var fullWindowEditor: some View {
         let node = viewModel.nodes.first(where: { $0.id == viewModel.fullEditorNodeId })
@@ -428,6 +428,7 @@ struct CanvasView: View {
         let accent: Color = nodeColor == .note
             ? MacbotDS.Colors.textSec
             : Color(hue: nodeColor.hue, saturation: 0.5, brightness: 0.85)
+        let isEditing = viewModel.fullEditorIsEditing
 
         return VStack(spacing: 0) {
             // Title bar
@@ -436,23 +437,47 @@ struct CanvasView: View {
                     .fill(accent)
                     .frame(width: 10, height: 10)
 
-                Text(nodeColor.rawValue.capitalized)
-                    .font(MacbotDS.Typo.heading)
-                    .foregroundStyle(MacbotDS.Colors.textPri)
+                // Source badge
+                if let node, node.isAINode {
+                    HStack(spacing: MacbotDS.Space.xs) {
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 10))
+                        Text("AI Generated")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .foregroundStyle(Color(hue: 0.35, saturation: 0.5, brightness: 0.8))
+                } else {
+                    Text(nodeColor.rawValue.capitalized)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(MacbotDS.Colors.textPri)
+                }
 
                 Spacer()
 
-                Text("\(viewModel.fullEditorText.count) characters")
-                    .font(MacbotDS.Typo.detail)
-                    .foregroundStyle(MacbotDS.Colors.textTer)
-                    .monospacedDigit()
-
-                Button(action: {
-                    withAnimation(Motion.snappy) { viewModel.closeFullEditor(save: false) }
-                }) {
-                    Text("Discard")
+                if isEditing {
+                    Text("\(viewModel.fullEditorText.count) characters")
                         .font(MacbotDS.Typo.detail)
                         .foregroundStyle(MacbotDS.Colors.textTer)
+                        .monospacedDigit()
+                }
+
+                // Edit / Read toggle
+                Button(action: {
+                    withAnimation(Motion.snappy) {
+                        viewModel.fullEditorIsEditing.toggle()
+                    }
+                }) {
+                    HStack(spacing: MacbotDS.Space.xs) {
+                        Image(systemName: isEditing ? "doc.richtext" : "pencil")
+                            .font(.system(size: 10))
+                        Text(isEditing ? "Preview" : "Edit")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .foregroundStyle(MacbotDS.Colors.textSec)
+                    .padding(.horizontal, MacbotDS.Space.sm)
+                    .padding(.vertical, MacbotDS.Space.xs)
+                    .background(.fill.tertiary)
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                 }
                 .buttonStyle(.plain)
 
@@ -460,53 +485,129 @@ struct CanvasView: View {
                     withAnimation(Motion.snappy) { viewModel.closeFullEditor(save: true) }
                 }) {
                     Text("Done")
-                        .font(MacbotDS.Typo.detail)
+                        .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(MacbotDS.Colors.accent)
                         .padding(.horizontal, MacbotDS.Space.md)
                         .padding(.vertical, MacbotDS.Space.xs)
                         .background(MacbotDS.Colors.accent.opacity(0.12))
-                        .clipShape(RoundedRectangle(cornerRadius: MacbotDS.Radius.sm, style: .continuous))
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 .keyboardShortcut(.return, modifiers: .command)
             }
-            .padding(.horizontal, MacbotDS.Space.lg)
+            .padding(.horizontal, MacbotDS.Space.xl)
             .padding(.vertical, MacbotDS.Space.md)
 
             Divider()
 
-            // Editor area
-            HStack(spacing: 0) {
-                // Writing pane
-                TextEditor(text: $viewModel.fullEditorText)
-                    .font(.system(.body, design: .monospaced))
-                    .foregroundStyle(MacbotDS.Colors.textPri)
-                    .scrollContentBackground(.hidden)
-                    .padding(MacbotDS.Space.lg)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                Divider()
-
-                // Live preview pane
-                ScrollView {
-                    Markdown(viewModel.fullEditorText.isEmpty ? "*Start writing...*" : viewModel.fullEditorText)
-                        .markdownTextStyle {
-                            FontSize(14)
-                            ForegroundColor(MacbotDS.Colors.textPri)
-                        }
-                        .markdownBlockStyle(\.codeBlock) { configuration in
-                            configuration.label
-                                .padding(MacbotDS.Space.sm)
-                                .background(.fill.quaternary)
-                                .clipShape(RoundedRectangle(cornerRadius: MacbotDS.Radius.sm, style: .continuous))
-                        }
+            if isEditing {
+                // Edit mode — monospaced editor with live preview side by side
+                HStack(spacing: 0) {
+                    TextEditor(text: $viewModel.fullEditorText)
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundStyle(MacbotDS.Colors.textPri)
+                        .scrollContentBackground(.hidden)
                         .padding(MacbotDS.Space.lg)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                    Divider()
+
+                    ScrollView {
+                        formattedContent
+                            .padding(MacbotDS.Space.xl)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                // Read mode — full-width beautifully formatted content
+                ScrollView {
+                    VStack(alignment: .leading, spacing: MacbotDS.Space.lg) {
+                        formattedContent
+
+                        // Images
+                        if let images = node?.images, !images.isEmpty {
+                            Divider()
+                                .padding(.vertical, MacbotDS.Space.sm)
+                            HStack(spacing: MacbotDS.Space.md) {
+                                ForEach(Array(images.enumerated()), id: \.offset) { _, data in
+                                    if let nsImage = NSImage(data: data) {
+                                        Image(nsImage: nsImage)
+                                            .resizable()
+                                            .aspectRatio(contentMode: .fit)
+                                            .frame(maxHeight: 300)
+                                            .clipShape(RoundedRectangle(cornerRadius: MacbotDS.Radius.sm, style: .continuous))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .padding(.horizontal, MacbotDS.Space.xl * 2)
+                    .padding(.vertical, MacbotDS.Space.xl)
+                    .frame(maxWidth: 720, alignment: .leading)
+                    .frame(maxWidth: .infinity)
+                }
             }
         }
         .background(MacbotDS.Colors.bg)
+        .onKeyPress(.escape) {
+            withAnimation(Motion.snappy) { viewModel.closeFullEditor(save: true) }
+            return .handled
+        }
+    }
+
+    private var formattedContent: some View {
+        Markdown(viewModel.fullEditorText.isEmpty ? "*Empty note*" : viewModel.fullEditorText)
+            .markdownTextStyle {
+                FontSize(15)
+                ForegroundColor(MacbotDS.Colors.textPri)
+            }
+            .markdownBlockStyle(\.heading1) { configuration in
+                configuration.label
+                    .markdownTextStyle {
+                        FontSize(24)
+                        FontWeight(.bold)
+                        ForegroundColor(MacbotDS.Colors.textPri)
+                    }
+                    .padding(.bottom, MacbotDS.Space.xs)
+            }
+            .markdownBlockStyle(\.heading2) { configuration in
+                configuration.label
+                    .markdownTextStyle {
+                        FontSize(20)
+                        FontWeight(.semibold)
+                        ForegroundColor(MacbotDS.Colors.textPri)
+                    }
+                    .padding(.bottom, MacbotDS.Space.xs)
+            }
+            .markdownBlockStyle(\.heading3) { configuration in
+                configuration.label
+                    .markdownTextStyle {
+                        FontSize(17)
+                        FontWeight(.semibold)
+                        ForegroundColor(MacbotDS.Colors.textSec)
+                    }
+            }
+            .markdownBlockStyle(\.codeBlock) { configuration in
+                configuration.label
+                    .padding(MacbotDS.Space.md)
+                    .background(.fill.quaternary)
+                    .clipShape(RoundedRectangle(cornerRadius: MacbotDS.Radius.sm, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: MacbotDS.Radius.sm, style: .continuous)
+                            .stroke(MacbotDS.Colors.separator, lineWidth: 0.5)
+                    )
+            }
+            .markdownBlockStyle(\.blockquote) { configuration in
+                configuration.label
+                    .padding(.leading, MacbotDS.Space.md)
+                    .overlay(alignment: .leading) {
+                        Rectangle()
+                            .fill(MacbotDS.Colors.accent.opacity(0.4))
+                            .frame(width: 3)
+                    }
+            }
+            .textSelection(.enabled)
     }
 
     // MARK: - Drop Handling
@@ -1045,7 +1146,9 @@ struct CanvasView: View {
                 if node.sceneData != nil {
                     viewModel.enter3DNode(id: node.id)
                 } else {
-                    viewModel.editingNodeId = node.id
+                    withAnimation(Motion.snappy) {
+                        viewModel.openFullEditor(nodeId: node.id)
+                    }
                 }
             }
             .gesture(nodeDragGesture(node: node))
@@ -1068,8 +1171,7 @@ struct CanvasView: View {
         }
 
         Button("Edit") {
-            viewModel.select(node.id)
-            viewModel.editingNodeId = node.id
+            withAnimation(Motion.snappy) { viewModel.openFullEditor(nodeId: node.id, editing: true) }
         }
 
         Button("Chat from here") {

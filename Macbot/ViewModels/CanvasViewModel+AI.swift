@@ -195,8 +195,7 @@ extension CanvasViewModel {
                                 title: section.title,
                                 content: section.content,
                                 position: pos,
-                                sourceIds: sourceIds,
-                                previousCardId: createdNodeIds.last
+                                sourceIds: sourceIds
                             )
                             createdNodeIds.append(nodeId)
                             flushedSections.append(section.title)
@@ -229,8 +228,7 @@ extension CanvasViewModel {
                         title: section.title,
                         content: section.content,
                         position: pos,
-                        sourceIds: sourceIds,
-                        previousCardId: createdNodeIds.last
+                        sourceIds: sourceIds
                     )
                     createdNodeIds.append(nodeId)
                     sectionIndex += 1
@@ -243,8 +241,7 @@ extension CanvasViewModel {
                         title: "",
                         content: accumulated.trimmingCharacters(in: .whitespacesAndNewlines),
                         position: pos,
-                        sourceIds: sourceIds,
-                        previousCardId: nil
+                        sourceIds: sourceIds
                     )
                     createdNodeIds.append(nodeId)
                 }
@@ -269,8 +266,7 @@ extension CanvasViewModel {
                     title: "",
                     content: "Error: \(error.localizedDescription)",
                     position: pos,
-                    sourceIds: sourceIds,
-                    previousCardId: nil
+                    sourceIds: sourceIds
                 )
             }
 
@@ -351,8 +347,7 @@ extension CanvasViewModel {
         title: String,
         content: String,
         position: CGPoint,
-        sourceIds: Set<UUID>,
-        previousCardId: UUID?
+        sourceIds: Set<UUID>
     ) -> UUID {
         let nodeId = UUID()
         let text: String
@@ -379,40 +374,32 @@ extension CanvasViewModel {
         withAnimation(Motion.snappy) {
             nodes.append(node)
 
-            // Connect to previous card in the chain (if multi-card)
-            if let prevId = previousCardId {
-                edges.append(CanvasEdge(fromId: prevId, toId: nodeId))
-            } else {
-                // First card — connect from all source nodes
-                for sourceId in sourceIds {
-                    edges.append(CanvasEdge(fromId: sourceId, toId: nodeId))
-                }
+            // Every card connects directly to source nodes (star pattern — clean, no tangling)
+            for sourceId in sourceIds {
+                edges.append(CanvasEdge(fromId: sourceId, toId: nodeId))
             }
         }
 
         return nodeId
     }
 
-    /// Position for the Nth section card — clean grid layout, left-to-right then top-to-bottom.
+    /// Position for the Nth section card — clean 2-column grid to the right of source.
+    /// Wide spacing prevents overlap. Cards flow top-to-bottom, left-to-right.
     private func sectionPosition(index: Int, total: Int, centerX: CGFloat, centerY: CGFloat) -> CGPoint {
-        let cols = min(total, 3)  // max 3 columns
-        let colSpacing: CGFloat = 320
-        let rowSpacing: CGFloat = 200
+        let cols = min(total > 4 ? 2 : 1, 2)  // 1 column for ≤4 cards, 2 for more
+        let colSpacing: CGFloat = 360          // 280pt card + 80pt gap
+        let rowSpacing: CGFloat = 300          // generous vertical gap for tall cards
 
         let col = index % cols
         let row = index / cols
 
-        let totalCols = CGFloat(min(total, cols))
         let totalRows = CGFloat((total + cols - 1) / cols)
 
-        // Center the grid around the target point
-        let gridWidth = (totalCols - 1) * colSpacing
-        let gridHeight = (totalRows - 1) * rowSpacing
-        let startX = centerX - gridWidth / 2
-        let startY = centerY - gridHeight / 2
+        // Start from top, offset right of source — don't center over it
+        let startY = centerY - (totalRows - 1) * rowSpacing / 2
 
         return CGPoint(
-            x: startX + CGFloat(col) * colSpacing,
+            x: centerX + CGFloat(col) * colSpacing,
             y: startY + CGFloat(row) * rowSpacing
         )
     }

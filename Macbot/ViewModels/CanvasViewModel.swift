@@ -141,14 +141,16 @@ final class CanvasViewModel {
         }
     }
 
-    /// Node open in full-window editor.
+    /// Node open in full-window viewer/editor.
     var fullEditorNodeId: UUID?
     var fullEditorText: String = ""
+    var fullEditorIsEditing: Bool = false
 
-    func openFullEditor(nodeId: UUID) {
+    func openFullEditor(nodeId: UUID, editing: Bool = false) {
         guard let node = nodes.first(where: { $0.id == nodeId }) else { return }
         fullEditorNodeId = nodeId
         fullEditorText = node.text
+        fullEditorIsEditing = editing
     }
 
     func closeFullEditor(save: Bool = true) {
@@ -160,6 +162,7 @@ final class CanvasViewModel {
         }
         fullEditorNodeId = nil
         fullEditorText = ""
+        fullEditorIsEditing = false
     }
 
     func enter3DNode(id: UUID) {
