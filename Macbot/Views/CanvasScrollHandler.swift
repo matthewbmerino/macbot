@@ -10,6 +10,11 @@ struct CanvasScrollHandler: NSViewRepresentable {
     var onZoom: (CGFloat, CGPoint, Bool) -> Void
     var onSpacebarChanged: (Bool) -> Void
     var onMouseMoved: (CGPoint) -> Void
+    /// Fired when the user presses Delete or Backspace outside any text
+    /// input. SwiftUI's keyboardShortcut for unmodified keys is unreliable
+    /// when no button is visibly focused; NSEvent monitoring inside this
+    /// handler works regardless of the SwiftUI focus state.
+    var onDeleteKey: () -> Void = {}
     var isSpacebarDown: Bool = false
     var isEdgeModeActive: Bool = false
 
@@ -19,6 +24,7 @@ struct CanvasScrollHandler: NSViewRepresentable {
         view.onZoom = onZoom
         view.onSpacebarChanged = onSpacebarChanged
         view.onMouseMoved = onMouseMoved
+        view.onDeleteKey = onDeleteKey
         return view
     }
 
@@ -27,6 +33,7 @@ struct CanvasScrollHandler: NSViewRepresentable {
         nsView.onZoom = onZoom
         nsView.onSpacebarChanged = onSpacebarChanged
         nsView.onMouseMoved = onMouseMoved
+        nsView.onDeleteKey = onDeleteKey
         nsView.updateCursor(spacebarDown: isSpacebarDown, edgeMode: isEdgeModeActive)
     }
 }
@@ -40,10 +47,12 @@ final class CanvasScrollNSView: NSView {
     var onZoom: ((CGFloat, CGPoint, Bool) -> Void)?
     var onSpacebarChanged: ((Bool) -> Void)?
     var onMouseMoved: ((CGPoint) -> Void)?
+    var onDeleteKey: (() -> Void)?
 
     private var flagsMonitor: Any?
     private var spaceDownMonitor: Any?
     private var spaceUpMonitor: Any?
+    private var deleteKeyMonitor: Any?
 
     override var acceptsFirstResponder: Bool { true }
     override var isFlipped: Bool { true }
@@ -52,8 +61,42 @@ final class CanvasScrollNSView: NSView {
         super.viewDidMoveToWindow()
         if window != nil {
             installSpacebarMonitor()
+            installDeleteKeyMonitor()
         } else {
             removeSpacebarMonitor()
+            removeDeleteKeyMonitor()
+        }
+    }
+
+    /// Listen for Delete (⌫, keyCode 51) and Forward-Delete (⌦, keyCode 117)
+    /// outside any text-input first responder. Canvas's SwiftUI
+    /// .onKeyPress(.delete) only fires when the canvas view has focus, and
+    /// click-to-select doesn't always route focus there reliably. This is
+    /// a belt-and-suspenders path that works regardless of SwiftUI focus.
+    private func installDeleteKeyMonitor() {
+        removeDeleteKeyMonitor()
+        deleteKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return event }
+            guard event.keyCode == 51 || event.keyCode == 117 else { return event }
+            // Don't steal the key from any active text input — including
+            // canvas-card TextEditors, search fields, chat composer, etc.
+            guard !self.isFirstResponderTextField() else { return event }
+            // Don't fire on modifier combos — we only want plain Delete.
+            let raw = event.modifierFlags.rawValue
+            let noModifiers = (raw & NSEvent.ModifierFlags.deviceIndependentFlagsMask.rawValue
+                & ~NSEvent.ModifierFlags.capsLock.rawValue
+                & ~NSEvent.ModifierFlags.numericPad.rawValue
+                & ~NSEvent.ModifierFlags.function.rawValue) == 0
+            guard noModifiers else { return event }
+            self.onDeleteKey?()
+            return nil // consume
+        }
+    }
+
+    private func removeDeleteKeyMonitor() {
+        if let m = deleteKeyMonitor {
+            NSEvent.removeMonitor(m)
+            deleteKeyMonitor = nil
         }
     }
 
@@ -111,6 +154,7 @@ final class CanvasScrollNSView: NSView {
 
     deinit {
         removeSpacebarMonitor()
+        removeDeleteKeyMonitor()
     }
 
     override func scrollWheel(with event: NSEvent) {

@@ -119,6 +119,7 @@ struct CanvasView: View {
                     canvasToolbar
                 }
             }
+            .overlay(scrollHandlerOverlay)
             .clipped()
             .background(MacbotDS.Colors.bg)
             .focusable()
@@ -726,6 +727,39 @@ struct CanvasView: View {
 
     // MARK: - Background Grid + Scroll Handler
 
+    /// The scroll/pan NSView handler. Hosted as an overlay on top of the
+    /// canvas ZStack so its hitTest (which returns self only for
+    /// scroll/magnify events) intercepts scroll regardless of whether the
+    /// cursor is over a card — otherwise cards sitting on top of the
+    /// background in the ZStack would block scroll events from reaching it.
+    /// Mouse clicks/drags still fall through to SwiftUI since hitTest
+    /// returns nil for non-scroll events.
+    private var scrollHandlerOverlay: some View {
+        CanvasScrollHandler(
+            onPan: { dx, dy in
+                viewModel.handleTrackpadPan(deltaX: dx, deltaY: dy)
+            },
+            onZoom: { factor, anchor, animated in
+                viewModel.zoom(by: factor, anchor: anchor, animated: animated)
+            },
+            onSpacebarChanged: { down in
+                viewModel.isSpacebarDown = down
+            },
+            onMouseMoved: { point in
+                if viewModel.pendingEdgeFromId != nil {
+                    viewModel.pendingEdgeEnd = point
+                }
+            },
+            onDeleteKey: {
+                guard !isTextInputActive, !viewModel.selectedIds.isEmpty else { return }
+                withAnimation(Motion.snappy) { viewModel.deleteSelected() }
+            },
+            isSpacebarDown: viewModel.isSpacebarDown,
+            isEdgeModeActive: viewModel.edgeModeActive || viewModel.pendingEdgeFromId != nil
+        )
+        .allowsHitTesting(true)
+    }
+
     private var canvasBackground: some View {
         GeometryReader { geo in
             ZStack {
@@ -733,26 +767,6 @@ struct CanvasView: View {
                 Canvas { ctx, size in
                     drawGrid(ctx: ctx, size: size)
                 }
-
-                // NSView layer for scroll wheel zoom + trackpad pan with momentum
-                CanvasScrollHandler(
-                    onPan: { dx, dy in
-                        viewModel.handleTrackpadPan(deltaX: dx, deltaY: dy)
-                    },
-                    onZoom: { factor, anchor, animated in
-                        viewModel.zoom(by: factor, anchor: anchor, animated: animated)
-                    },
-                    onSpacebarChanged: { down in
-                        viewModel.isSpacebarDown = down
-                    },
-                    onMouseMoved: { point in
-                        if viewModel.pendingEdgeFromId != nil {
-                            viewModel.pendingEdgeEnd = point
-                        }
-                    },
-                    isSpacebarDown: viewModel.isSpacebarDown,
-                    isEdgeModeActive: viewModel.edgeModeActive || viewModel.pendingEdgeFromId != nil
-                )
             }
             .contentShape(Rectangle())
             // Spacebar + drag for pan, otherwise box selection
