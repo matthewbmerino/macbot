@@ -30,6 +30,31 @@ struct CanvasView: View {
             || viewModel.fullEditorNodeId != nil
     }
 
+    /// Hidden keyboard-shortcut buttons that carry Delete/Backspace so they
+    /// work even when the canvas view itself doesn't have SwiftUI focus
+    /// (e.g. right after a click-to-select, before focus has re-anchored).
+    /// Both guards are checked: no text input active AND something selected.
+    /// The primary `.onKeyPress(.delete)` handler still runs when canvas IS
+    /// focused — this is a belt-and-suspenders backup.
+    @ViewBuilder
+    private var deleteShortcutBackup: some View {
+        Group {
+            Button("") {
+                guard !isTextInputActive, !viewModel.selectedIds.isEmpty else { return }
+                withAnimation(Motion.snappy) { viewModel.deleteSelected() }
+            }
+            .keyboardShortcut(.delete, modifiers: [])
+
+            Button("") {
+                guard !isTextInputActive, !viewModel.selectedIds.isEmpty else { return }
+                withAnimation(Motion.snappy) { viewModel.deleteSelected() }
+            }
+            .keyboardShortcut(.init("\u{8}"), modifiers: [])
+        }
+        .frame(width: 0, height: 0)
+        .hidden()
+    }
+
     var body: some View {
         HStack(spacing: 0) {
             ZStack {
@@ -302,10 +327,18 @@ struct CanvasView: View {
         }
         .onChange(of: viewModel.selectedIds) { _, _ in
             viewModel.refreshRelatedNodes()
+            // Re-anchor focus on the canvas whenever selection changes so
+            // Delete / Backspace / Tab / arrow-key handlers fire reliably,
+            // even when the click-to-select event path didn't route focus.
+            // Deferred via Task so it runs after the gesture's state
+            // transaction settles (setting @FocusState mid-gesture can be
+            // flaky in SwiftUI).
+            Task { @MainActor in canvasFocused = true }
         }
         .onChange(of: viewModel.showInspector) { _, _ in
             viewModel.refreshRelatedNodes()
         }
+        .background(deleteShortcutBackup)
         .overlay {
             if viewModel.showSearch {
                 universalSearchOverlay
