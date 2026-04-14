@@ -82,7 +82,6 @@ extension CanvasViewModel {
                 self.currentCanvasId = record.id
                 self.loadCanvasList()
             }
-            self.checkLanding()
         }
     }
 
