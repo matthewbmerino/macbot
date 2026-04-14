@@ -291,6 +291,34 @@ final class DatabaseManager: Sendable {
             }
         }
 
+        // Notebook / Page — long-form note section alongside chat and canvas.
+        // `parentId` is nullable and unused in Phase 1 (flat notebooks); the
+        // column is laid down now so Phase 2 nested folders don't need another
+        // migration. Pages cascade-delete with their parent notebook.
+        migrator.registerMigration("v14_notebooks_and_pages") { db in
+            try db.create(table: "notebooks") { t in
+                t.column("id", .text).primaryKey()
+                t.column("title", .text).notNull()
+                t.column("parentId", .text)
+                t.column("position", .double).notNull().defaults(to: 0)
+                t.column("createdAt", .datetime).notNull()
+                t.column("updatedAt", .datetime).notNull()
+            }
+            try db.create(table: "pages") { t in
+                t.column("id", .text).primaryKey()
+                t.column("notebookId", .text)
+                    .notNull()
+                    .indexed()
+                    .references("notebooks", onDelete: .cascade)
+                t.column("title", .text).notNull()
+                t.column("content", .text).notNull().defaults(to: "")
+                t.column("position", .double).notNull().defaults(to: 0)
+                t.column("embedding", .blob)
+                t.column("createdAt", .datetime).notNull()
+                t.column("updatedAt", .datetime).notNull()
+            }
+        }
+
         return migrator
     }
 

@@ -19,14 +19,17 @@ struct ChatView: View {
                 Divider()
             }
 
-            if viewModel.contentMode == .chat {
+            switch viewModel.contentMode {
+            case .chat:
                 chatContent
-            } else {
+            case .canvas:
                 CanvasView(
                     viewModel: viewModel.canvasViewModel,
                     loadMessages: { viewModel.loadMessagesForCanvas(chatId: $0) },
                     orchestrator: viewModel.canvasOrchestrator
                 )
+            case .notebook:
+                NotebookView(viewModel: viewModel.notebookViewModel)
             }
         }
         .overlay(alignment: .topLeading) {
@@ -44,29 +47,20 @@ struct ChatView: View {
 
                     Divider().frame(height: 14)
 
-                    Button(action: {
-                        withAnimation(Motion.snappy) {
-                            if viewModel.contentMode == .chat {
-                                viewModel.refreshCanvasChats()
-                                viewModel.setupCanvas()
-                                viewModel.contentMode = .canvas
-                            } else {
-                                viewModel.contentMode = .chat
-                            }
-                        }
-                    }) {
+                    // Quick cycle through the three modes. Clicking advances
+                    // notebook → canvas → chat → notebook…
+                    Button(action: cycleContentMode) {
                         HStack(spacing: MacbotDS.Space.xs) {
-                            Image(systemName: viewModel.contentMode == .chat
-                                  ? "rectangle.on.rectangle.angled"
-                                  : "bubble.left.and.text.bubble.right")
+                            Image(systemName: modeIcon(for: nextMode))
                                 .font(.system(size: 10))
-                            Text(viewModel.contentMode == .chat ? "Canvas" : "Chat")
+                            Text(modeLabel(for: nextMode))
                                 .font(.system(size: 11, weight: .medium))
                         }
                         .foregroundStyle(MacbotDS.Colors.textSec)
                     }
                     .buttonStyle(.plain)
-                    .help(viewModel.contentMode == .chat ? "Switch to Canvas" : "Switch to Chat")
+                    .help("Switch to \(modeLabel(for: nextMode))")
+                    .keyboardShortcut(.init("J"), modifiers: [.command, .shift])
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 7)
@@ -89,6 +83,9 @@ struct ChatView: View {
                 viewModel.refreshCanvasChats()
                 viewModel.setupCanvas()
             }
+            if viewModel.contentMode == .notebook {
+                viewModel.setupNotebook()
+            }
         }
     }
 
@@ -110,7 +107,8 @@ struct ChatView: View {
 
                 Spacer()
 
-                if viewModel.contentMode == .chat {
+                switch viewModel.contentMode {
+                case .chat:
                     Button(action: { viewModel.newChat() }) {
                         Image(systemName: "square.and.pencil")
                             .font(.caption)
@@ -121,7 +119,7 @@ struct ChatView: View {
                     }
                     .buttonStyle(.plain)
                     .help("New Chat")
-                } else {
+                case .canvas:
                     Button(action: { viewModel.canvasViewModel.createCanvas() }) {
                         Image(systemName: "plus")
                             .font(.caption)
@@ -132,6 +130,18 @@ struct ChatView: View {
                     }
                     .buttonStyle(.plain)
                     .help("New Canvas")
+                case .notebook:
+                    Button(action: { viewModel.notebookViewModel.createPageInCurrentNotebook() }) {
+                        Image(systemName: "square.and.pencil")
+                            .font(.caption)
+                            .foregroundStyle(MacbotDS.Colors.textSec)
+                            .padding(6)
+                            .background(.fill.tertiary)
+                            .clipShape(RoundedRectangle(cornerRadius: MacbotDS.Radius.sm, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .help("New Page (⌘J)")
+                    .keyboardShortcut(.init("J"), modifiers: .command)
                 }
             }
             .padding(.horizontal, MacbotDS.Space.md)
@@ -140,8 +150,9 @@ struct ChatView: View {
 
             // Mode toggle — segmented control
             HStack(spacing: 2) {
-                modeButton("Chat", icon: "bubble.left.and.text.bubble.right", mode: .chat)
+                modeButton("Notebook", icon: "book.closed", mode: .notebook)
                 modeButton("Canvas", icon: "rectangle.on.rectangle.angled", mode: .canvas)
+                modeButton("Chat", icon: "bubble.left.and.text.bubble.right", mode: .chat)
             }
             .padding(2)
             .background(.fill.quaternary)
@@ -175,15 +186,18 @@ struct ChatView: View {
             .padding(.horizontal, MacbotDS.Space.md)
             .padding(.bottom, MacbotDS.Space.md)
 
-            // Content list — shows chats or canvases based on mode
-            if viewModel.contentMode == .chat {
+            // Content list — shows chats, canvases, or notebooks based on mode
+            switch viewModel.contentMode {
+            case .chat:
                 if viewModel.isSearching {
                     searchResultsList
                 } else {
                     chatList
                 }
-            } else {
+            case .canvas:
                 canvasList
+            case .notebook:
+                notebooksList
             }
 
             Spacer(minLength: 0)
@@ -342,6 +356,107 @@ struct ChatView: View {
         }
     }
 
+    /// Compact notebook list for the sidebar. The full three-pane UI lives
+    /// inside NotebookView; this is just a scannable summary so the user can
+    /// glance at their notebooks from outside the notebook section.
+    private var notebooksList: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 2) {
+                ForEach(viewModel.notebookViewModel.notebooks) { notebook in
+                    let isSelected = viewModel.notebookViewModel.currentNotebookId == notebook.id
+                    HStack(spacing: 0) {
+                        RoundedRectangle(cornerRadius: 1.5)
+                            .fill(isSelected ? MacbotDS.Colors.accent : .clear)
+                            .frame(width: 3)
+                            .padding(.vertical, 4)
+
+                        HStack(spacing: MacbotDS.Space.sm) {
+                            Image(systemName: "book.closed")
+                                .font(.caption)
+                                .foregroundStyle(isSelected ? MacbotDS.Colors.accent : MacbotDS.Colors.textTer)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(notebook.title)
+                                    .font(.caption.weight(isSelected ? .semibold : .regular))
+                                    .foregroundStyle(isSelected ? MacbotDS.Colors.textPri : MacbotDS.Colors.textSec)
+                                    .lineLimit(1)
+                                Text(notebook.updatedAt, style: .relative)
+                                    .font(.caption2)
+                                    .foregroundStyle(MacbotDS.Colors.textTer)
+                            }
+                        }
+                        .padding(.horizontal, MacbotDS.Space.sm)
+                        .padding(.vertical, MacbotDS.Space.sm)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(.horizontal, MacbotDS.Space.xs)
+                    .background(isSelected ? AnyShapeStyle(.fill.secondary) : AnyShapeStyle(.clear))
+                    .clipShape(RoundedRectangle(cornerRadius: MacbotDS.Radius.sm, style: .continuous))
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        viewModel.notebookViewModel.selectNotebook(notebook.id)
+                    }
+                }
+
+                Button(action: { viewModel.notebookViewModel.createNotebook() }) {
+                    HStack(spacing: MacbotDS.Space.sm) {
+                        Image(systemName: "plus")
+                            .font(.caption)
+                        Text("New notebook")
+                            .font(.caption)
+                    }
+                    .foregroundStyle(MacbotDS.Colors.textTer)
+                    .padding(.horizontal, MacbotDS.Space.md)
+                    .padding(.vertical, MacbotDS.Space.sm)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.vertical, MacbotDS.Space.xs)
+        }
+    }
+
+    // MARK: - Mode cycle helpers (top-bar quick toggle)
+
+    private var nextMode: ContentMode {
+        switch viewModel.contentMode {
+        case .notebook: return .canvas
+        case .canvas:   return .chat
+        case .chat:     return .notebook
+        }
+    }
+
+    private func modeIcon(for mode: ContentMode) -> String {
+        switch mode {
+        case .notebook: return "book.closed"
+        case .canvas:   return "rectangle.on.rectangle.angled"
+        case .chat:     return "bubble.left.and.text.bubble.right"
+        }
+    }
+
+    private func modeLabel(for mode: ContentMode) -> String {
+        switch mode {
+        case .notebook: return "Notebook"
+        case .canvas:   return "Canvas"
+        case .chat:     return "Chat"
+        }
+    }
+
+    private func cycleContentMode() {
+        withAnimation(Motion.snappy) {
+            let target = nextMode
+            switch target {
+            case .canvas:
+                viewModel.refreshCanvasChats()
+                viewModel.setupCanvas()
+            case .notebook:
+                viewModel.setupNotebook()
+            case .chat:
+                break
+            }
+            viewModel.contentMode = target
+        }
+    }
+
     private func modeButton(_ title: String, icon: String, mode: ContentMode) -> some View {
         let isActive = viewModel.contentMode == mode
         return Button(action: {
@@ -349,6 +464,9 @@ struct ChatView: View {
                 if mode == .canvas {
                     viewModel.refreshCanvasChats()
                     viewModel.setupCanvas()
+                }
+                if mode == .notebook {
+                    viewModel.setupNotebook()
                 }
                 viewModel.contentMode = mode
             }

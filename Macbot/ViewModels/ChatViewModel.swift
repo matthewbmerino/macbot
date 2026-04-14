@@ -15,14 +15,17 @@ final class ChatStreamAccumulator {
     static let flushInterval: CFAbsoluteTime = 0.1  // 10 fps max
 }
 
-/// Whether the main content area shows the chat or the canvas.
-enum ContentMode: String { case chat, canvas }
+/// Whether the main content area shows the chat, the canvas, or the
+/// notebook. Notebook is the default landing surface — the long-form
+/// writing pillar of the product.
+enum ContentMode: String { case chat, canvas, notebook }
 
 @Observable
 final class ChatViewModel {
     // View mode
-    var contentMode: ContentMode = .canvas
+    var contentMode: ContentMode = .notebook
     let canvasViewModel = CanvasViewModel()
+    let notebookViewModel = NotebookViewModel()
 
     /// Sync the canvas chat browser with the current chat list.
     func refreshCanvasChats() {
@@ -40,6 +43,11 @@ final class ChatViewModel {
     /// Initialize the canvas (load or create default canvas).
     func setupCanvas() {
         canvasViewModel.ensureCanvas()
+    }
+
+    /// Initialize the notebook (load notebooks, seed a default one on first run).
+    func setupNotebook() {
+        notebookViewModel.bootstrap()
     }
 
     // Current chat state
