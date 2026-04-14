@@ -118,6 +118,21 @@ struct CanvasView: View {
                     }
                     canvasToolbar
                 }
+
+                // Canvas picker — document-title-style chip at top-center.
+                // The only always-visible affordance for "which canvas am I
+                // on?", "switch canvas", "new canvas", "rename", "delete".
+                VStack {
+                    canvasPickerButton
+                        .padding(.horizontal, MacbotDS.Space.sm)
+                        .padding(.vertical, 6)
+                        .background(MacbotDS.Mat.chrome)
+                        .clipShape(Capsule())
+                        .overlay(Capsule().stroke(MacbotDS.Colors.separator.opacity(0.5), lineWidth: 0.5))
+                        .shadow(color: .black.opacity(0.1), radius: 6, y: 2)
+                        .padding(.top, MacbotDS.Space.md)
+                    Spacer()
+                }
             }
             .overlay(scrollHandlerOverlay)
             .clipped()
