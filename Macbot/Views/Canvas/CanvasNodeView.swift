@@ -371,9 +371,6 @@ struct CanvasNodeView: View {
 
     private var manualHeader: some View {
         HStack(spacing: MacbotDS.Space.sm) {
-            Circle()
-                .fill(nodeAccent)
-                .frame(width: 8, height: 8)
             Text(node.color.rawValue.capitalized)
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(MacbotDS.Colors.textTer)

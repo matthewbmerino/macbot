@@ -216,10 +216,12 @@ struct CanvasView: View {
                 default: return .ignored
                 }
             }
-            // Tab to cycle forward through nodes
+            // Tab cycles forward through nodes; Shift+Tab cycles backward.
+            // Keyboard-first navigation between collapsed cards.
             .onKeyPress(.tab) {
                 guard !isTextInputActive else { return .ignored }
-                viewModel.navigateNode(forward: true)
+                let forward = !NSEvent.modifierFlags.contains(.shift)
+                viewModel.navigateNode(forward: forward)
                 return .handled
             }
             // Arrow keys for spatial navigation between nodes
@@ -2271,7 +2273,7 @@ struct CanvasView: View {
                     // Create a starter note at center
                     let center = viewModel.viewToCanvas(viewCenter)
                     withAnimation(Motion.snappy) {
-                        viewModel.addNode(at: center, color: .idea)
+                        viewModel.addNode(at: center, color: .note)
                     }
                 }) {
                     HStack(spacing: MacbotDS.Space.sm) {
