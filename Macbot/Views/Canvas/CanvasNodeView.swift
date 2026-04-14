@@ -265,35 +265,13 @@ struct CanvasNodeView: View {
             radius: isSelected ? 12 : 6,
             y: isSelected ? 2 : 3
         )
-        .overlay(alignment: .topTrailing) {
-            // Single execute button on hover — hidden during any processing
-            // state (either this card is being written into, or it's feeding
-            // another AI op) because re-triggering is ambiguous mid-flight.
-            if isHovered && !isEditing && !isAIStreaming && !isProcessingSource
-                && !node.text.isEmpty && node.widgetState != .loading {
-                Button(action: onExecute) {
-                    Image(systemName: "bolt.fill")
-                        .font(.system(size: 10))
-                        .foregroundStyle(MacbotDS.Colors.accent)
-                        .frame(width: 22, height: 22)
-                        .background(MacbotDS.Colors.accent.opacity(0.12))
-                        .clipShape(Circle())
-                }
-                .buttonStyle(.plain)
-                .help("Execute (⌘↩ expand · ↩ answer in editor)")
-                .padding(.trailing, MacbotDS.Space.sm)
-                .padding(.top, MacbotDS.Space.sm)
-                .transition(.scale(scale: 0.8).combined(with: .opacity))
-            }
-        }
-        .overlay(alignment: .trailing) {
-            // Connector port — drag to create edge. Only appears when the
-            // node is selected (not on every hover) to avoid visual noise.
-            if isSelected && !isEditing {
-                ConnectorPort(onStartEdge: onStartEdge)
-                    .transition(.opacity)
-            }
-        }
+        // Hover-bolt execute button and right-edge connector dot were
+        // removed — both duplicated existing affordances and made the
+        // card read as "loud with chrome" rather than "quiet content":
+        //   Execute → toolbar "Run" button · ⌘↩ · right-click "Execute"
+        //   Create edge → "E" for edge mode · click source → target
+        // Pattern matches Figma / tldraw / Miro: the card surfaces its
+        // content, not an action panel.
     }
 
     /// Inline processing row shown at the bottom of the card whenever the
