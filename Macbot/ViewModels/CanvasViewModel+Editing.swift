@@ -96,6 +96,29 @@ extension CanvasViewModel {
         scheduleSave()
     }
 
+    /// Cycle the selected card's color through the user-authored categories
+    /// (.note → .idea → .task → .note). Skips .reference and .ai which are
+    /// auto-assigned to chat/AI nodes. If the selected card is currently one
+    /// of those auto-assigned colors, the cycle starts at .note (adopts the
+    /// card into the user's workflow). Works on multi-select — every
+    /// selected card advances one step independently.
+    func cycleSelectedColor() {
+        guard !selectedIds.isEmpty else { return }
+        let cycle: [CanvasNode.NodeColor] = [.note, .idea, .task]
+        pushUndo()
+        for id in selectedIds {
+            guard let idx = nodes.firstIndex(where: { $0.id == id }) else { continue }
+            let current = nodes[idx].color
+            if let pos = cycle.firstIndex(of: current) {
+                nodes[idx].color = cycle[(pos + 1) % cycle.count]
+            } else {
+                // Auto-assigned (.reference or .ai) → start at .note
+                nodes[idx].color = cycle[0]
+            }
+        }
+        scheduleSave()
+    }
+
     func deleteSelected() {
         // Cancel AI if the streaming node is being deleted
         if let streamingId = aiStreamingNodeId, selectedIds.contains(streamingId) {

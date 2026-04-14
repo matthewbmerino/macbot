@@ -216,12 +216,16 @@ struct CanvasView: View {
                 default: return .ignored
                 }
             }
-            // Tab cycles forward through nodes; Shift+Tab cycles backward.
-            // Keyboard-first navigation between collapsed cards.
+            // Tab cycles forward through nodes. Shift+Tab cycles the selected
+            // card's color through the user-authored categories
+            // (.note → .idea → .task) for quick keyboard-first tagging.
             .onKeyPress(.tab) {
                 guard !isTextInputActive else { return .ignored }
-                let forward = !NSEvent.modifierFlags.contains(.shift)
-                viewModel.navigateNode(forward: forward)
+                if NSEvent.modifierFlags.contains(.shift) {
+                    viewModel.cycleSelectedColor()
+                } else {
+                    viewModel.navigateNode(forward: true)
+                }
                 return .handled
             }
             // Arrow keys for spatial navigation between nodes
@@ -1365,6 +1369,12 @@ struct CanvasView: View {
                 guard viewModel.entered3DNodeId != node.id else { return }
                 let dist = hypot(value.translation.width, value.translation.height)
                 if dist > 4 {
+                    // Only move the card if it was already selected. Dragging
+                    // on an unselected card used to start a move immediately,
+                    // which made canvas-panning over cards impossible — the
+                    // card would get grabbed instead. Requiring selection
+                    // first gives a deliberate "I mean to move this" step.
+                    guard viewModel.selectedIds.contains(node.id) else { return }
                     if viewModel.draggingNodeId == nil {
                         viewModel.draggingNodeId = node.id
                         viewModel.beginDrag(anchorId: node.id)
@@ -1391,7 +1401,9 @@ struct CanvasView: View {
                         viewModel.select(node.id, exclusive: exclusive)
                         canvasFocused = true
                     }
-                } else {
+                } else if viewModel.draggingNodeId == node.id {
+                    // A move actually happened — commit it. If the drag was on
+                    // an unselected card we never called beginDrag, so skip.
                     viewModel.commitMove()
                     if viewModel.pendingEdgeFromId != nil {
                         let dropPoint = viewModel.viewToCanvas(value.location)
