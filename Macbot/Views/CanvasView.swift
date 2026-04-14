@@ -1323,10 +1323,55 @@ struct CanvasView: View {
 
         Divider()
 
-        Button("Cycle Color") { viewModel.cycleColor(id: node.id) }
+        // Set Color — absorbs what used to be in the contextual selection bar.
+        // "Cycle Color" stays for keyboard-adjacent quick toggling; the nested
+        // Menu lets mouse users pick a specific color without guessing.
+        Menu("Set Color") {
+            ForEach(CanvasNode.NodeColor.allCases, id: \.self) { color in
+                Button(color.rawValue.capitalized) {
+                    if !viewModel.selectedIds.contains(node.id) {
+                        viewModel.select(node.id)
+                    }
+                    viewModel.setColor(color)
+                }
+            }
+        }
+        Button("Cycle Color (⇧⇥)") { viewModel.cycleColor(id: node.id) }
 
+        // Resize — width presets, formerly in the contextual bar.
+        Menu("Resize") {
+            Button("Small (160)")  { ensureSelected(node); viewModel.resizeSelected(width: 160) }
+            Button("Medium (220)") { ensureSelected(node); viewModel.resizeSelected(width: 220) }
+            Button("Large (300)")  { ensureSelected(node); viewModel.resizeSelected(width: 300) }
+            Button("Wide (400)")   { ensureSelected(node); viewModel.resizeSelected(width: 400) }
+        }
+
+        // Align / Distribute — only meaningful with 2+ selected.
         if viewModel.selectedIds.count >= 2 {
-            Button("Group Selected") { viewModel.groupFromSelection() }
+            Menu("Align") {
+                Button("Left")   { viewModel.alignSelected(.left) }
+                Button("Center") { viewModel.alignSelected(.centerH) }
+                Button("Right")  { viewModel.alignSelected(.right) }
+                Divider()
+                Button("Top")    { viewModel.alignSelected(.top) }
+                Button("Middle") { viewModel.alignSelected(.centerV) }
+                Button("Bottom") { viewModel.alignSelected(.bottom) }
+                if viewModel.selectedIds.count >= 3 {
+                    Divider()
+                    Button("Distribute Horizontally") {
+                        viewModel.distributeSelected(axis: .horizontal)
+                    }
+                    Button("Distribute Vertically") {
+                        viewModel.distributeSelected(axis: .vertical)
+                    }
+                }
+            }
+            Button("Group Selected (⌘G)") { viewModel.groupFromSelection() }
+        }
+
+        Button("Duplicate (⌘D)") {
+            ensureSelected(node)
+            viewModel.duplicateSelected()
         }
 
         if node.groupId != nil {
@@ -1338,6 +1383,15 @@ struct CanvasView: View {
         Button("Delete", role: .destructive) {
             viewModel.select(node.id)
             viewModel.deleteSelected()
+        }
+    }
+
+    /// Select the node if it isn't already part of the current selection.
+    /// Used by context-menu actions so right-clicking a non-selected node
+    /// acts on that node rather than on a stale selection elsewhere.
+    private func ensureSelected(_ node: CanvasNode) {
+        if !viewModel.selectedIds.contains(node.id) {
+            viewModel.select(node.id)
         }
     }
 
@@ -1586,17 +1640,15 @@ struct CanvasView: View {
     // MARK: - Toolbar
 
     private var canvasToolbar: some View {
-        VStack(spacing: MacbotDS.Space.sm) {
-            // Contextual selection bar — appears when nodes are selected
-            if !viewModel.selectedIds.isEmpty {
-                contextualSelectionBar
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
-
-            // Primary toolbar
-            primaryToolbar
-        }
-        .padding(.bottom, MacbotDS.Space.md)
+        // Single-bar model: the contextual selection bar was dissolved because
+        // its contents were either globally redundant (undo/redo/delete/
+        // duplicate have keyboard shortcuts everywhere) or only accidentally
+        // selection-dependent. Selection-specific actions (color / resize /
+        // align) now live on the node's right-click context menu, which is
+        // the macOS-native discovery path and doesn't introduce a second
+        // floating chrome element competing with the primary toolbar.
+        primaryToolbar
+            .padding(.bottom, MacbotDS.Space.md)
     }
 
     private var primaryToolbar: some View {
@@ -1736,116 +1788,6 @@ struct CanvasView: View {
         .padding(.vertical, 2)
         .background(.fill.quaternary)
         .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-    }
-
-    // MARK: - Contextual Selection Bar
-
-    private var contextualSelectionBar: some View {
-        HStack(spacing: MacbotDS.Space.xs) {
-            // Color picker — direct color circles
-            ForEach(CanvasNode.NodeColor.allCases, id: \.self) { color in
-                Button(action: { viewModel.setColor(color) }) {
-                    Circle()
-                        .fill(color.accentColor)
-                        .frame(width: 14, height: 14)
-                        .overlay(Circle().stroke(Color.primary.opacity(0.15), lineWidth: 0.5))
-                }
-                .buttonStyle(.plain)
-                .help(color.rawValue.capitalized)
-            }
-
-            Divider().frame(height: 16)
-
-            // Width presets
-            Menu {
-                Button("Small (160)") { viewModel.resizeSelected(width: 160) }
-                Button("Medium (220)") { viewModel.resizeSelected(width: 220) }
-                Button("Large (300)") { viewModel.resizeSelected(width: 300) }
-                Button("Wide (400)") { viewModel.resizeSelected(width: 400) }
-            } label: {
-                Image(systemName: "arrow.left.and.right")
-                    .font(.caption2)
-                    .foregroundStyle(MacbotDS.Colors.textSec)
-                    .frame(width: 22, height: 20)
-            }
-            .menuStyle(.borderlessButton)
-            .frame(width: 22)
-            .help("Resize")
-
-            // Alignment (only when 2+ selected)
-            if viewModel.selectedIds.count >= 2 {
-                Divider().frame(height: 16)
-
-                Menu {
-                    Section("Align") {
-                        Button("Left") { viewModel.alignSelected(.left) }
-                        Button("Center") { viewModel.alignSelected(.centerH) }
-                        Button("Right") { viewModel.alignSelected(.right) }
-                        Divider()
-                        Button("Top") { viewModel.alignSelected(.top) }
-                        Button("Middle") { viewModel.alignSelected(.centerV) }
-                        Button("Bottom") { viewModel.alignSelected(.bottom) }
-                    }
-                    if viewModel.selectedIds.count >= 3 {
-                        Section("Distribute") {
-                            Button("Horizontally") { viewModel.distributeSelected(axis: .horizontal) }
-                            Button("Vertically") { viewModel.distributeSelected(axis: .vertical) }
-                        }
-                    }
-                } label: {
-                    Image(systemName: "align.horizontal.left")
-                        .font(.caption2)
-                        .foregroundStyle(MacbotDS.Colors.textSec)
-                        .frame(width: 22, height: 20)
-                }
-                .menuStyle(.borderlessButton)
-                .frame(width: 22)
-                .help("Align & Distribute")
-            }
-
-            Divider().frame(height: 16)
-
-            // Group / Ungroup
-            if viewModel.selectedIds.count >= 2 {
-                toolbarSmallButton("rectangle.3.group", help: "Group (Cmd+G)") {
-                    withAnimation(Motion.snappy) { viewModel.groupFromSelection() }
-                }
-            }
-
-            // Duplicate
-            toolbarSmallButton("plus.square.on.square", help: "Duplicate (Cmd+D)") {
-                withAnimation(Motion.snappy) { viewModel.duplicateSelected() }
-            }
-
-            // Undo / Redo
-            toolbarSmallButton("arrow.uturn.backward", help: "Undo (Cmd+Z)") {
-                withAnimation(Motion.snappy) { viewModel.undo() }
-            }
-            .disabled(!viewModel.canUndo)
-
-            toolbarSmallButton("arrow.uturn.forward", help: "Redo (Cmd+Shift+Z)") {
-                withAnimation(Motion.snappy) { viewModel.redo() }
-            }
-            .disabled(!viewModel.canRedo)
-
-            Divider().frame(height: 16)
-
-            // Delete
-            toolbarSmallButton("trash", help: "Delete") {
-                withAnimation(Motion.snappy) { viewModel.deleteSelected() }
-            }
-
-            // Selection count
-            Text("\(viewModel.selectedIds.count) selected")
-                .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(MacbotDS.Colors.textTer)
-        }
-        .padding(.horizontal, MacbotDS.Space.md)
-        .padding(.vertical, 6)
-        .background(MacbotDS.Mat.chrome)
-        .clipShape(Capsule())
-        .overlay(Capsule().stroke(MacbotDS.Colors.separator, lineWidth: 0.5))
-        .shadow(color: .black.opacity(0.1), radius: 8, y: 4)
     }
 
     // MARK: - Quick Add
@@ -2246,18 +2188,6 @@ struct CanvasView: View {
                 .font(.subheadline)
                 .foregroundStyle(MacbotDS.Colors.textSec)
                 .frame(width: 28, height: 28)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help(help)
-    }
-
-    private func toolbarSmallButton(_ icon: String, help: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .font(.caption2)
-                .foregroundStyle(MacbotDS.Colors.textSec)
-                .frame(width: 22, height: 20)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
