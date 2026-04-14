@@ -151,26 +151,40 @@ struct CanvasNodeView: View {
                         )
                         .clipped()
                         .background(
-                            // Off-screen measurement view — sizes to intrinsic content height,
-                            // reports up via PreferenceKey. Width is constrained to the card's
-                            // content width (node.width minus horizontal padding) so wrapping
-                            // matches the visible view.
-                            nodeTextContent
-                                .frame(width: max(0, node.width - MacbotDS.Space.md * 2), alignment: .topLeading)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .background(
-                                    GeometryReader { geo in
-                                        Color.clear
-                                            .preference(key: ContentHeightPreferenceKey.self, value: geo.size.height)
-                                    }
-                                )
-                                .hidden()
-                                .allowsHitTesting(false)
+                            // Off-screen measurement view — only rendered while we
+                            // don't yet have a measured height. Once measured we
+                            // drop it so we're not re-parsing the Markdown twice
+                            // on every body eval (pan/zoom, hover, etc.). The
+                            // onChange below resets measuredContentHeight to 0
+                            // when the text actually changes so we re-measure.
+                            Group {
+                                if measuredContentHeight == 0 {
+                                    nodeTextContent
+                                        .frame(width: max(0, node.width - MacbotDS.Space.md * 2), alignment: .topLeading)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                        .background(
+                                            GeometryReader { geo in
+                                                Color.clear
+                                                    .preference(key: ContentHeightPreferenceKey.self, value: geo.size.height)
+                                            }
+                                        )
+                                        .hidden()
+                                        .allowsHitTesting(false)
+                                }
+                            }
                         )
                         .onPreferenceChange(ContentHeightPreferenceKey.self) { newHeight in
                             if abs(newHeight - measuredContentHeight) > 0.5 {
                                 measuredContentHeight = newHeight
                             }
+                        }
+                        .onChange(of: node.text) { _, _ in
+                            // Force re-measurement when the text changes (AI
+                            // streaming, edits). Also re-measure if width changed.
+                            measuredContentHeight = 0
+                        }
+                        .onChange(of: node.width) { _, _ in
+                            measuredContentHeight = 0
                         }
                         .contentShape(Rectangle())
                         .onTapGesture(count: 1) {
