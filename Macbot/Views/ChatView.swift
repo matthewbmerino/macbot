@@ -536,20 +536,24 @@ struct ChatView: View {
                 viewModel.contentMode = mode
             }
         }) {
-            HStack(spacing: MacbotDS.Space.xs) {
+            VStack(spacing: 3) {
                 Image(systemName: icon)
-                    .font(.system(size: 10))
+                    .font(.system(size: 13))
                 Text(title)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: 9, weight: .medium))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
             }
             .foregroundStyle(isActive ? MacbotDS.Colors.textPri : MacbotDS.Colors.textTer)
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 5)
+            .padding(.vertical, 6)
+            .padding(.horizontal, 2)
             .background(isActive ? AnyShapeStyle(MacbotDS.Mat.chrome) : AnyShapeStyle(.clear))
             .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
             .shadow(color: isActive ? .black.opacity(0.06) : .clear, radius: 2, y: 1)
         }
         .buttonStyle(.plain)
+        .help(title)
     }
 
     private func chatRow(_ chat: ChatRecord) -> some View {
