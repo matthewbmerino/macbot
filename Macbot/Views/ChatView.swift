@@ -12,9 +12,19 @@ struct ChatView: View {
     var body: some View {
         HStack(spacing: 0) {
             if !sidebarCollapsed {
-                sidebar
-                    .frame(width: 220)
-                    .transition(.move(edge: .leading).combined(with: .opacity))
+                // Notebook mode gets a narrow icon rail so it doesn't
+                // double-show the notebook list (NotebookView's own
+                // notebooks pane is authoritative). Chat and Canvas keep
+                // the full 220pt sidebar.
+                if viewModel.contentMode == .notebook {
+                    railSidebar
+                        .frame(width: 52)
+                        .transition(.move(edge: .leading).combined(with: .opacity))
+                } else {
+                    sidebar
+                        .frame(width: 220)
+                        .transition(.move(edge: .leading).combined(with: .opacity))
+                }
 
                 Divider()
             }
@@ -179,7 +189,9 @@ struct ChatView: View {
             .padding(.horizontal, MacbotDS.Space.md)
             .padding(.bottom, MacbotDS.Space.md)
 
-            // Content list — shows chats, canvases, or notebooks based on mode
+            // Content list — shows chats or canvases based on mode.
+            // Notebook mode never renders this full sidebar (uses railSidebar),
+            // so its case is unreachable but required for switch exhaustiveness.
             switch viewModel.contentMode {
             case .chat:
                 if viewModel.isSearching {
@@ -190,7 +202,7 @@ struct ChatView: View {
             case .canvas:
                 canvasList
             case .notebook:
-                notebooksList
+                EmptyView()
             }
 
             Spacer(minLength: 0)
@@ -349,63 +361,82 @@ struct ChatView: View {
         }
     }
 
-    /// Compact notebook list for the sidebar. The full three-pane UI lives
-    /// inside NotebookView; this is just a scannable summary so the user can
-    /// glance at their notebooks from outside the notebook section.
-    private var notebooksList: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 2) {
-                ForEach(viewModel.notebookViewModel.notebooks) { notebook in
-                    let isSelected = viewModel.notebookViewModel.currentNotebookId == notebook.id
-                    HStack(spacing: 0) {
-                        RoundedRectangle(cornerRadius: 1.5)
-                            .fill(isSelected ? MacbotDS.Colors.accent : .clear)
-                            .frame(width: 3)
-                            .padding(.vertical, 4)
+    // MARK: - Rail sidebar (notebook mode)
 
-                        HStack(spacing: MacbotDS.Space.sm) {
-                            Image(systemName: "book.closed")
-                                .font(.caption)
-                                .foregroundStyle(isSelected ? MacbotDS.Colors.accent : MacbotDS.Colors.textTer)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(notebook.title)
-                                    .font(.caption.weight(isSelected ? .semibold : .regular))
-                                    .foregroundStyle(isSelected ? MacbotDS.Colors.textPri : MacbotDS.Colors.textSec)
-                                    .lineLimit(1)
-                                Text(notebook.updatedAt, style: .relative)
-                                    .font(.caption2)
-                                    .foregroundStyle(MacbotDS.Colors.textTer)
-                            }
-                        }
-                        .padding(.horizontal, MacbotDS.Space.sm)
-                        .padding(.vertical, MacbotDS.Space.sm)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .padding(.horizontal, MacbotDS.Space.xs)
-                    .background(isSelected ? AnyShapeStyle(.fill.secondary) : AnyShapeStyle(.clear))
-                    .clipShape(RoundedRectangle(cornerRadius: MacbotDS.Radius.sm, style: .continuous))
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        viewModel.notebookViewModel.selectNotebook(notebook.id)
-                    }
-                }
-
-                Button(action: { viewModel.notebookViewModel.createNotebook() }) {
-                    HStack(spacing: MacbotDS.Space.sm) {
-                        Image(systemName: "plus")
-                            .font(.caption)
-                        Text("New notebook")
-                            .font(.caption)
-                    }
+    /// Narrow icon rail shown in notebook mode so the app-level chrome
+    /// doesn't compete with NotebookView's own notebooks pane. Preserves
+    /// mode switching, sidebar collapse, and new-page entry while freeing
+    /// horizontal space for the editor.
+    private var railSidebar: some View {
+        VStack(spacing: MacbotDS.Space.md) {
+            Button(action: {
+                withAnimation(Motion.snappy) { sidebarCollapsed = true }
+            }) {
+                Image(systemName: "sidebar.left")
+                    .font(.callout)
                     .foregroundStyle(MacbotDS.Colors.textTer)
-                    .padding(.horizontal, MacbotDS.Space.md)
-                    .padding(.vertical, MacbotDS.Space.sm)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .buttonStyle(.plain)
+                    .frame(width: 36, height: 28)
             }
-            .padding(.vertical, MacbotDS.Space.xs)
+            .buttonStyle(.plain)
+            .help("Collapse sidebar")
+
+            Divider()
+                .padding(.horizontal, MacbotDS.Space.xs)
+
+            railModeButton(icon: "book.closed", mode: .notebook, help: "Notebook")
+            railModeButton(icon: "rectangle.on.rectangle.angled", mode: .canvas, help: "Canvas")
+            railModeButton(icon: "bubble.left.and.text.bubble.right", mode: .chat, help: "Chat")
+
+            Divider()
+                .padding(.horizontal, MacbotDS.Space.xs)
+
+            Button(action: { viewModel.notebookViewModel.createPageInCurrentNotebook() }) {
+                Image(systemName: "square.and.pencil")
+                    .font(.callout)
+                    .foregroundStyle(MacbotDS.Colors.textSec)
+                    .frame(width: 36, height: 28)
+                    .background(.fill.tertiary)
+                    .clipShape(RoundedRectangle(cornerRadius: MacbotDS.Radius.sm, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .help("New Page (⌘J)")
+            .keyboardShortcut(.init("J"), modifiers: .command)
+
+            Spacer()
         }
+        .padding(.vertical, MacbotDS.Space.md)
+        .frame(maxHeight: .infinity)
+        .background(MacbotDS.Mat.chrome)
+    }
+
+    private func railModeButton(icon: String, mode: ContentMode, help: String) -> some View {
+        let isActive = viewModel.contentMode == mode
+        return Button(action: {
+            withAnimation(Motion.snappy) {
+                if mode == .canvas {
+                    viewModel.refreshCanvasChats()
+                    viewModel.setupCanvas()
+                }
+                if mode == .notebook {
+                    viewModel.setupNotebook()
+                }
+                viewModel.contentMode = mode
+            }
+        }) {
+            Image(systemName: icon)
+                .font(.system(size: 13))
+                .foregroundStyle(isActive ? MacbotDS.Colors.textPri : MacbotDS.Colors.textTer)
+                .frame(width: 36, height: 28)
+                .background(isActive ? AnyShapeStyle(MacbotDS.Mat.chrome) : AnyShapeStyle(.clear))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(isActive ? MacbotDS.Colors.separator.opacity(0.4) : .clear, lineWidth: 0.5)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .shadow(color: isActive ? .black.opacity(0.08) : .clear, radius: 2, y: 1)
+        }
+        .buttonStyle(.plain)
+        .help(help)
     }
 
     // MARK: - Mode cycle helpers (top-bar quick toggle)

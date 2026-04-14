@@ -23,7 +23,7 @@ enum ContentMode: String { case chat, canvas, notebook }
 @Observable
 final class ChatViewModel {
     // View mode
-    var contentMode: ContentMode = .notebook
+    var contentMode: ContentMode = .canvas
     let canvasViewModel = CanvasViewModel()
     let notebookViewModel = NotebookViewModel()
 
