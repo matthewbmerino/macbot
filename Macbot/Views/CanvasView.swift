@@ -98,7 +98,11 @@ struct CanvasView: View {
             .background(MacbotDS.Colors.bg)
             .focusable()
             .focused($canvasFocused)
-            .onAppear { canvasFocused = true }
+            .onAppear {
+                canvasFocused = true
+                CanvasBridge.shared.register(viewModel)
+            }
+            .onDisappear { CanvasBridge.shared.unregister(viewModel) }
             .onKeyPress(.delete) {
                 guard !isTextInputActive else { return .ignored }
                 withAnimation(Motion.snappy) { viewModel.deleteSelected() }
@@ -1144,6 +1148,10 @@ struct CanvasView: View {
                         viewModel.nodes[idx].originalPrompt = nil
                     }
                     executeSelectedNodes()
+                },
+                onEnterEdit: {
+                    viewModel.select(node.id)
+                    viewModel.editingNodeId = node.id
                 }
             )
             .scaleEffect(viewModel.scale * (isDragging ? 1.03 : isHovered ? 1.01 : 1.0))

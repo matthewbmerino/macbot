@@ -12,12 +12,23 @@ final class HotkeyManager {
 
     private init() {}
 
-    /// Register Cmd+Shift+Space for quick panel toggle
-    func registerDefaults(togglePanel: @escaping () -> Void) {
+    /// Register the default global hotkeys:
+    ///   - Cmd+Shift+Space: toggle the QuickPanel
+    ///   - Cmd+N:           drop a note on the active canvas (falls back to
+    ///                      the QuickPanel when no canvas is mounted)
+    func registerDefaults(
+        togglePanel: @escaping () -> Void,
+        quickNote: @escaping () -> Void
+    ) {
         register(
             keyCode: kVK_Space,
             modifiers: [.maskCommand, .maskShift],
             action: togglePanel
+        )
+        register(
+            keyCode: kVK_ANSI_N,
+            modifiers: [.maskCommand],
+            action: quickNote
         )
 
         startListening()

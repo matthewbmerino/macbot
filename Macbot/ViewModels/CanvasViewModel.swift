@@ -98,7 +98,13 @@ final class CanvasViewModel {
             searchResults = []
             return
         }
-        searchResults = canvasStore.searchNodes(query: q)
+        // Semantic hybrid: vector similarity first, falls back to keyword
+        // LIKE inside the store. Matches `MemoryStore.search` semantics.
+        Task { @MainActor [weak self, canvasStore] in
+            let results = await canvasStore.searchNodesSemantic(query: q)
+            guard let self, self.searchQuery.trimmingCharacters(in: .whitespaces) == q else { return }
+            self.searchResults = results
+        }
     }
 
     func navigateToSearchResult(_ result: CanvasStore.SearchResult) {

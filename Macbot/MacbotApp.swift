@@ -85,9 +85,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func setAppIcon() {
-        // Set the dock icon from the bundled .icns, or fall back to the Assets
-        // directory for unbundled debug runs.
+        // Load the 92%-sized runtime icon for the dock while running.
+        // The bundle's AppIcon.icns is intentionally oversized so that macOS 26's
+        // forced gray-box shrink renders at a similar visual size when quit.
         let candidates = [
+            Bundle.main.url(forResource: "AppIconRuntime", withExtension: "png"),
+            Bundle.main.resourceURL?
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Assets/AppIconRuntime.png"),
             Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
             Bundle.main.resourceURL?
                 .deletingLastPathComponent()
@@ -152,15 +158,28 @@ final class AppState {
             // Hop to main thread only for UI state updates
             await MainActor.run {
                 if reachable {
-                    self.chatViewModel = ChatViewModel(orchestrator: self.orchestrator)
+                    let chatVM = ChatViewModel(orchestrator: self.orchestrator)
+                    self.chatViewModel = chatVM
                     self.isReady = true
 
                     QuickPanelController.shared.orchestrator = self.orchestrator
                     OverlayController.shared.orchestrator = self.orchestrator
                     CompanionController.shared.orchestrator = self.orchestrator
-                    HotkeyManager.shared.registerDefaults {
-                        QuickPanelController.shared.toggle()
+
+                    // Wire semantic search for the canvas to the same embedding
+                    // model the memory store uses. Safe to set unconditionally —
+                    // embedder only calls the client when needed.
+                    chatVM.canvasViewModel.canvasStore.embedder.embeddingClient = self.orchestrator.client
+                    chatVM.canvasViewModel.canvasStore.embedder.embeddingModel = self.orchestrator.modelConfig.embedding
+                    Task {
+                        // Backfill embeddings for any pre-existing nodes.
+                        await chatVM.canvasViewModel.canvasStore.embedder.reconcile()
                     }
+
+                    HotkeyManager.shared.registerDefaults(
+                        togglePanel: { QuickPanelController.shared.toggle() },
+                        quickNote: { CanvasBridge.shared.quickNoteFromAnywhere() }
+                    )
                     OverlayController.shared.registerHotkey()
 
                     Log.app.info("Macbot ready")

@@ -24,8 +24,13 @@ cp .build/release/Macbot "$MACOS/Macbot"
 # Copy Info.plist
 cp Macbot/Info.plist "$CONTENTS/Info.plist"
 
-# Copy app icon
+# Copy app icon (bundle = oversized for macOS 26 gray-box shrink compensation)
 cp Assets/AppIcon.icns "$RESOURCES/AppIcon.icns"
+
+# Runtime icon — 92% sized, used by setAppIcon() while running
+if [ -f Assets/AppIconRuntime.png ]; then
+    cp Assets/AppIconRuntime.png "$RESOURCES/AppIconRuntime.png"
+fi
 
 # Copy resources (Metal shaders, Soul.md, etc.)
 if [ -d ".build/release/Macbot_Macbot.bundle" ]; then

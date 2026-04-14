@@ -273,6 +273,24 @@ final class DatabaseManager: Sendable {
             }
         }
 
+        // AI node provenance — the UUIDs of the source nodes an AI node was
+        // generated from. Without this, backlinks ("what did this summary come
+        // from?") are unrecoverable on reload.
+        migrator.registerMigration("v12_ai_source_nodes") { db in
+            try db.alter(table: "canvas_nodes") { t in
+                t.add(column: "sourceAINodeIdsJSON", .text)
+            }
+        }
+
+        // Canvas node embeddings — enables semantic search and autolink.
+        // Populated asynchronously by CanvasEmbedder; null until the embedder
+        // catches up.
+        migrator.registerMigration("v13_canvas_node_embeddings") { db in
+            try db.alter(table: "canvas_nodes") { t in
+                t.add(column: "embedding", .blob)
+            }
+        }
+
         return migrator
     }
 

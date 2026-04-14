@@ -35,6 +35,8 @@ struct CanvasNodeRecord: Codable, FetchableRecord, PersistableRecord, Identifiab
     var displayMode: String
     var viewportHeight: Double?
     var imagesJSON: String?
+    var sourceAINodeIdsJSON: String?
+    var embedding: Data?
     var createdAt: Date
 
     static let databaseTableName = "canvas_nodes"
@@ -73,9 +75,11 @@ struct CanvasGroupRecord: Codable, FetchableRecord, PersistableRecord, Identifia
 
 final class CanvasStore {
     private let db: DatabasePool
+    let embedder: CanvasEmbedder
 
     init(db: DatabasePool = DatabaseManager.shared.dbPool) {
         self.db = db
+        self.embedder = CanvasEmbedder(db: db)
     }
 
     // MARK: - Canvas CRUD
@@ -173,6 +177,9 @@ final class CanvasStore {
     // MARK: - Save / Load Full Canvas
 
     /// Save all canvas state in a single transaction. Replaces existing data.
+    /// Node embeddings are preserved across saves when the node's text is
+    /// unchanged; otherwise they are invalidated (set to null) so the embedder
+    /// will regenerate them on the next `reconcile`.
     func saveCanvas(
         canvasId: String,
         nodes: [CanvasNode],
@@ -192,10 +199,25 @@ final class CanvasStore {
                     try canvas.update(db)
                 }
 
+                // Snapshot existing embeddings, keyed by (id, text). We only
+                // carry an embedding forward if the text is unchanged — any
+                // edit invalidates.
+                var preservedEmbeddings: [String: Data] = [:]
+                let existingRows = try Row.fetchAll(db, sql: """
+                    SELECT id, text, embedding FROM canvas_nodes WHERE canvasId = ?
+                """, arguments: [canvasId])
+                for row in existingRows {
+                    guard let emb: Data = row["embedding"] else { continue }
+                    let id: String = row["id"]
+                    let text: String = row["text"]
+                    preservedEmbeddings["\(id)::\(text)"] = emb
+                }
+
                 // Replace nodes
                 try db.execute(sql: "DELETE FROM canvas_nodes WHERE canvasId = ?", arguments: [canvasId])
                 for node in nodes {
-                    let record = Self.toNodeRecord(node, canvasId: canvasId)
+                    var record = Self.toNodeRecord(node, canvasId: canvasId)
+                    record.embedding = preservedEmbeddings["\(node.id.uuidString)::\(node.text)"]
                     try record.insert(db)
                 }
 
@@ -234,8 +256,52 @@ final class CanvasStore {
                     try record.insert(db)
                 }
             }
+
+            // Backfill embeddings for any nodes whose text just changed (or
+            // that were created in this save). No-op if no embedding client
+            // is wired yet.
+            Task { [embedder] in await embedder.reconcile(canvasId: canvasId) }
         } catch {
             Log.app.error("[canvas] saveCanvas failed: \(error)")
+        }
+    }
+
+    // MARK: - Semantic search
+
+    /// Hybrid search: semantic (vector) first, falls back to keyword LIKE
+    /// when the embedder has no client or returns no hits. Mirrors the
+    /// MemoryStore hybrid pattern.
+    func searchNodesSemantic(query: String, limit: Int = 20) async -> [SearchResult] {
+        let hits = await embedder.semanticSearch(query: query, limit: limit)
+        guard !hits.isEmpty else { return searchNodes(query: query) }
+
+        let idStrings = hits.map { $0.nodeId.uuidString }
+
+        do {
+            let rows = try await db.read { db in
+                try Row.fetchAll(db, sql: """
+                    SELECT n.id, n.canvasId, c.title AS canvasTitle, n.text, n.color
+                    FROM canvas_nodes n
+                    JOIN canvases c ON c.id = n.canvasId
+                    WHERE n.id IN (\(idStrings.map { _ in "?" }.joined(separator: ",")))
+                """, arguments: StatementArguments(idStrings))
+            }
+
+            // Preserve the similarity-sorted order from the vector index.
+            let byId: [String: SearchResult] = Dictionary(uniqueKeysWithValues: rows.map { row in
+                let r = SearchResult(
+                    nodeId: row["id"],
+                    canvasId: row["canvasId"],
+                    canvasTitle: row["canvasTitle"],
+                    nodeText: row["text"],
+                    nodeColor: row["color"]
+                )
+                return (r.nodeId, r)
+            })
+            return idStrings.compactMap { byId[$0] }
+        } catch {
+            Log.app.error("[canvas] searchNodesSemantic failed: \(error)")
+            return searchNodes(query: query)
         }
     }
 
@@ -284,6 +350,7 @@ final class CanvasStore {
         var sourceAgentCategory: String?
         var sourceTimestamp: Date?
         var sourceAIAction: String?
+        var sourceAINodeIdsJSON: String?
 
         switch node.source {
         case .manual:
@@ -299,6 +366,12 @@ final class CanvasStore {
             sourceType = "ai"
             sourceAIAction = origin.action
             sourceTimestamp = origin.timestamp
+            if !origin.sourceNodeIds.isEmpty {
+                let ids = origin.sourceNodeIds.map { $0.uuidString }
+                if let data = try? JSONEncoder().encode(ids) {
+                    sourceAINodeIdsJSON = String(data: data, encoding: .utf8)
+                }
+            }
         }
 
         // Serialize sceneData as JSON
@@ -336,6 +409,8 @@ final class CanvasStore {
             displayMode: node.displayMode.rawValue,
             viewportHeight: node.viewportHeight.map { Double($0) },
             imagesJSON: imagesJSON,
+            sourceAINodeIdsJSON: sourceAINodeIdsJSON,
+            embedding: nil,
             createdAt: Date()
         )
     }
@@ -354,9 +429,14 @@ final class CanvasStore {
                 timestamp: r.sourceTimestamp ?? Date()
             ))
         case "ai":
+            var sourceNodeIds: [UUID] = []
+            if let json = r.sourceAINodeIdsJSON, let data = json.data(using: .utf8),
+               let strings = try? JSONDecoder().decode([String].self, from: data) {
+                sourceNodeIds = strings.compactMap { UUID(uuidString: $0) }
+            }
             source = .ai(NodeSource.AIOrigin(
                 action: r.sourceAIAction ?? "expand",
-                sourceNodeIds: [],
+                sourceNodeIds: sourceNodeIds,
                 timestamp: r.sourceTimestamp ?? Date()
             ))
         default:

@@ -18,19 +18,20 @@ struct CanvasNodeView: View {
     var onWidgetEdit: () -> Void = {}
     var onWidgetRerun: () -> Void = {}
     var onWidgetExpand: () -> Void = {}
+    var onEnterEdit: () -> Void = {}
 
     @State private var localText: String = ""
     @State private var isExpanded: Bool = false
-    @State private var contentOverflows: Bool = false
-    @State private var executeMode: ExecuteMode = .widget
+    @State private var measuredContentHeight: CGFloat = 0
+    @State private var keyMonitor: Any?
     @FocusState private var textFocused: Bool
 
-    enum ExecuteMode {
-        case widget   // in-place answer
-        case expand   // knowledge graph
+    private var contentOverflows: Bool {
+        measuredContentHeight > maxCollapsedHeight
     }
 
-    private let maxCollapsedHeight: CGFloat = 160
+    private let maxCollapsedHeight: CGFloat = 100
+    private let maxEditorHeight: CGFloat = 80
 
     var body: some View {
         if node.displayMode == .viewport3D {
@@ -106,77 +107,76 @@ struct CanvasNodeView: View {
                         .foregroundStyle(MacbotDS.Colors.textPri)
                         .scrollContentBackground(.hidden)
                         .focused($textFocused)
-                        .frame(minHeight: 40, maxHeight: 200)
+                        .frame(minHeight: 32, maxHeight: maxEditorHeight)
                         .onAppear {
                             localText = node.text
                             textFocused = true
+                            installKeyMonitor()
+                            // Always start collapsed when editing so card stays compact after commit
+                            isExpanded = false
+                        }
+                        .onDisappear {
+                            removeKeyMonitor()
+                            // Reset to compact view after editing finishes
+                            isExpanded = false
+                            // Force re-measurement of the newly committed text
+                            measuredContentHeight = 0
                         }
                         .onChange(of: localText) { _, newValue in
                             onTextChange(newValue)
                         }
-                        .onKeyPress(.escape) {
-                            onCommitEdit()
-                            return .handled
-                        }
-                        .onKeyPress(.return) {
-                            // Return = execute in current mode (unless Cmd held for expand override)
-                            guard !NSEvent.modifierFlags.contains(.shift) else { return .ignored }
-                            if NSEvent.modifierFlags.contains(.command) {
-                                onCommitEdit()
-                                onExecute()
-                            } else {
-                                onCommitEdit()
-                                if executeMode == .widget {
-                                    onWidgetExecute()
-                                } else {
-                                    onExecute()
-                                }
-                            }
-                            return .handled
-                        }
-                        .onKeyPress(.tab) {
-                            // Shift+Tab toggles mode
-                            guard NSEvent.modifierFlags.contains(.shift) else { return .ignored }
-                            withAnimation(Motion.snappy) {
-                                executeMode = executeMode == .widget ? .expand : .widget
-                            }
-                            return .handled
-                        }
 
-                    // Mode indicator pill
-                    executeModeIndicator
+                    // Subtle keyboard hint
+                    HStack(spacing: 6) {
+                        Text("↩ Answer  ·  ⌘↩ Expand")
+                            .font(.system(size: 9))
+                            .foregroundStyle(MacbotDS.Colors.textTer.opacity(0.6))
+                        Spacer()
+                    }
                 }
             } else {
                 if node.text.isEmpty {
-                    Text("Double-click to edit...")
+                    Text("Click to type...")
                         .font(.callout)
                         .foregroundStyle(MacbotDS.Colors.textTer)
                         .italic()
+                        .contentShape(Rectangle())
+                        .onTapGesture { onEnterEdit() }
                 } else {
-                    ZStack(alignment: .bottom) {
-                        nodeTextContent
-                            .frame(maxHeight: isExpanded ? nil : maxCollapsedHeight, alignment: .top)
-                            .clipped()
-                            .background(
-                                GeometryReader { geo in
-                                    Color.clear.onAppear {
-                                        contentOverflows = geo.size.height >= maxCollapsedHeight
+                    // Visible content: clipped to maxCollapsedHeight when it would overflow and is not expanded.
+                    nodeTextContent
+                        .frame(
+                            maxHeight: (contentOverflows && !isExpanded) ? maxCollapsedHeight : nil,
+                            alignment: .top
+                        )
+                        .clipped()
+                        .background(
+                            // Off-screen measurement view — sizes to intrinsic content height,
+                            // reports up via PreferenceKey. Width is constrained to the card's
+                            // content width (node.width minus horizontal padding) so wrapping
+                            // matches the visible view.
+                            nodeTextContent
+                                .frame(width: max(0, node.width - MacbotDS.Space.md * 2), alignment: .topLeading)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .background(
+                                    GeometryReader { geo in
+                                        Color.clear
+                                            .preference(key: ContentHeightPreferenceKey.self, value: geo.size.height)
                                     }
-                                    .onChange(of: node.text) {
-                                        contentOverflows = geo.size.height >= maxCollapsedHeight
-                                    }
-                                }
-                            )
-
-                        if contentOverflows && !isExpanded {
-                            LinearGradient(
-                                colors: [.clear, MacbotDS.Colors.bg.opacity(0.9)],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                            .frame(height: 32)
+                                )
+                                .hidden()
+                                .allowsHitTesting(false)
+                        )
+                        .onPreferenceChange(ContentHeightPreferenceKey.self) { newHeight in
+                            if abs(newHeight - measuredContentHeight) > 0.5 {
+                                measuredContentHeight = newHeight
+                            }
                         }
-                    }
+                        .contentShape(Rectangle())
+                        .onTapGesture(count: 1) {
+                            // Single click on text content of selected node = enter edit
+                            if isSelected { onEnterEdit() }
+                        }
 
                     if contentOverflows {
                         Button {
@@ -245,33 +245,18 @@ struct CanvasNodeView: View {
             y: isSelected ? 2 : 3
         )
         .overlay(alignment: .topTrailing) {
-            // Execute buttons — appear on hover
+            // Single execute button on hover — defaults to expand mode
             if isHovered && !isEditing && !isAIStreaming && !node.text.isEmpty && node.widgetState != .loading {
-                HStack(spacing: MacbotDS.Space.xs) {
-                    // Widget mode (in-place answer)
-                    Button(action: onWidgetExecute) {
-                        Image(systemName: "return")
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundStyle(MacbotDS.Colors.textSec)
-                            .frame(width: 24, height: 24)
-                            .background(.fill.tertiary)
-                            .clipShape(Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .help("Quick answer (Return)")
-
-                    // Expand mode (knowledge graph)
-                    Button(action: onExecute) {
-                        Image(systemName: "bolt.fill")
-                            .font(.system(size: 10))
-                            .foregroundStyle(MacbotDS.Colors.accent)
-                            .frame(width: 24, height: 24)
-                            .background(MacbotDS.Colors.accent.opacity(0.12))
-                            .clipShape(Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .help("Expand (Cmd+Return)")
+                Button(action: onExecute) {
+                    Image(systemName: "bolt.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(MacbotDS.Colors.accent)
+                        .frame(width: 22, height: 22)
+                        .background(MacbotDS.Colors.accent.opacity(0.12))
+                        .clipShape(Circle())
                 }
+                .buttonStyle(.plain)
+                .help("Execute (⌘↩ expand · ↩ answer in editor)")
                 .padding(.trailing, MacbotDS.Space.sm)
                 .padding(.top, MacbotDS.Space.sm)
                 .transition(.scale(scale: 0.8).combined(with: .opacity))
@@ -406,41 +391,40 @@ struct CanvasNodeView: View {
         .help("Connect to another node")
     }
 
-    // MARK: - Execute Mode Indicator
+    // MARK: - Key Monitor (reliable Return/Tab while editing)
 
-    private var executeModeIndicator: some View {
-        HStack(spacing: MacbotDS.Space.sm) {
-            // Mode toggle
-            HStack(spacing: 2) {
-                modePill("↩ Answer", mode: .widget)
-                modePill("⚡ Expand", mode: .expand)
+    private func installKeyMonitor() {
+        removeKeyMonitor()
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            // Only intercept while this card is the editing target
+            guard isEditing, textFocused else { return event }
+
+            // Return key (keyCode 36)
+            if event.keyCode == 36 {
+                let cmdHeld = event.modifierFlags.contains(.command)
+                let shiftHeld = event.modifierFlags.contains(.shift)
+                if shiftHeld {
+                    // Shift+Return = newline (let TextEditor handle)
+                    return event
+                }
+                onCommitEdit()
+                if cmdHeld {
+                    onExecute()        // ⌘↩ = expand (knowledge graph)
+                } else {
+                    onWidgetExecute()  // ↩ = widget (in-place answer)
+                }
+                return nil  // consume
             }
-            .padding(2)
-            .background(.fill.quaternary)
-            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
 
-            Spacer()
-
-            Text("⇧Tab to switch")
-                .font(.system(size: 9))
-                .foregroundStyle(MacbotDS.Colors.textTer.opacity(0.6))
+            return event
         }
     }
 
-    private func modePill(_ label: String, mode: ExecuteMode) -> some View {
-        let isActive = executeMode == mode
-        return Button(action: {
-            withAnimation(Motion.snappy) { executeMode = mode }
-        }) {
-            Text(label)
-                .font(.system(size: 9, weight: isActive ? .semibold : .regular))
-                .foregroundStyle(isActive ? MacbotDS.Colors.textPri : MacbotDS.Colors.textTer)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(isActive ? AnyShapeStyle(.fill.secondary) : AnyShapeStyle(.clear))
-                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+    private func removeKeyMonitor() {
+        if let m = keyMonitor {
+            NSEvent.removeMonitor(m)
+            keyMonitor = nil
         }
-        .buttonStyle(.plain)
     }
 
     // MARK: - Widget Footers
@@ -536,7 +520,16 @@ struct CanvasNodeView: View {
     }
 
     private var nodeBackground: some ShapeStyle {
-        .fill.secondary
+        Color(nsColor: .windowBackgroundColor).opacity(0.95)
+    }
+}
+
+// MARK: - Content Height Preference
+
+private struct ContentHeightPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 
