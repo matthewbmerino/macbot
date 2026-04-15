@@ -22,17 +22,11 @@
 
 ---
 
-### Chat
-
-Multi-agent AI with tool calling, vision, code generation, and RAG — all running locally via Ollama.
-
-![Chat UI](Assets/chat.png)
-
 ### Canvas
 
-Infinite workspace for visual thinking. Write notes, connect ideas, and execute them with AI — one click.
+Infinite workspace for visual thinking. Write notes, connect ideas, and expand any topic into a knowledge map with AI — all keyboard-first, all on-device.
 
-![Canvas UI](Assets/canvas.png)
+![Canvas UI](Assets/CanvasGUI.png)
 
 ---
 
