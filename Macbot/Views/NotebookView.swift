@@ -17,11 +17,14 @@ struct NotebookView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            notebooksPane
-                .frame(width: 200)
-                .background(MacbotDS.Mat.chrome)
+            if viewModel.notebooksPaneVisible {
+                notebooksPane
+                    .frame(width: 200)
+                    .background(MacbotDS.Mat.chrome)
+                    .transition(.move(edge: .leading).combined(with: .opacity))
 
-            Divider()
+                Divider()
+            }
 
             pagesPane
                 .frame(width: 260)
@@ -37,6 +40,39 @@ struct NotebookView: View {
                 viewModel.bootstrap()
             }
         }
+        // Keyboard grammar for notebook: ↑/↓/j/k navigate the pages list
+        // (the primary list in this mode), `n` creates a new page. All
+        // gated on "not typing" so title/body editors keep their keys.
+        .onKeyPress(.upArrow)   { movePages(by: -1) ? .handled : .ignored }
+        .onKeyPress(.downArrow) { movePages(by: +1) ? .handled : .ignored }
+        .onKeyPress(characters: CharacterSet(charactersIn: "jknN")) { press in
+            guard !AppFocus.isTextInputActive() else { return .ignored }
+            guard !press.modifiers.contains(.command) else { return .ignored }
+            switch press.characters {
+            case "j": return movePages(by: +1) ? .handled : .ignored
+            case "k": return movePages(by: -1) ? .handled : .ignored
+            case "n", "N":
+                viewModel.createPageInCurrentNotebook()
+                return .handled
+            default: return .ignored
+            }
+        }
+    }
+
+    @discardableResult
+    private func movePages(by delta: Int) -> Bool {
+        guard !AppFocus.isTextInputActive() else { return false }
+        let pages = viewModel.pages
+        guard !pages.isEmpty else { return false }
+        let currentIdx = pages.firstIndex(where: { $0.id == viewModel.currentPageId })
+        let nextIdx: Int
+        if let currentIdx {
+            nextIdx = min(max(currentIdx + delta, 0), pages.count - 1)
+        } else {
+            nextIdx = delta > 0 ? 0 : pages.count - 1
+        }
+        viewModel.loadPage(pages[nextIdx].id)
+        return true
     }
 
     // MARK: - Notebooks pane (left)
@@ -107,6 +143,12 @@ struct NotebookView: View {
         .background(isSelected ? AnyShapeStyle(.fill.secondary) : AnyShapeStyle(.clear))
         .clipShape(RoundedRectangle(cornerRadius: MacbotDS.Radius.sm, style: .continuous))
         .contentShape(Rectangle())
+        // Double-tap first so it takes priority — single-tap selects, but a
+        // second quick tap switches into inline rename mode (Finder-style).
+        .onTapGesture(count: 2) {
+            notebookRenameField = notebook.title
+            renamingNotebookId = notebook.id
+        }
         .onTapGesture { viewModel.selectNotebook(notebook.id) }
         .contextMenu {
             Button("Rename") {
@@ -162,7 +204,7 @@ struct NotebookView: View {
                 .foregroundStyle(MacbotDS.Colors.textTer)
                 .lineLimit(2)
 
-            Text(page.updatedAt, style: .relative)
+            Text(Self.updatedLabel(for: page.updatedAt))
                 .font(.caption2)
                 .foregroundStyle(MacbotDS.Colors.textTer)
         }
@@ -178,14 +220,17 @@ struct NotebookView: View {
     }
 
     private var emptyPagesState: some View {
-        VStack(alignment: .leading, spacing: MacbotDS.Space.sm) {
+        VStack(alignment: .leading, spacing: MacbotDS.Space.md) {
             Image(systemName: "doc.text")
                 .font(.title3)
                 .foregroundStyle(MacbotDS.Colors.textTer)
-            Text("No pages yet. Press ⌘J or tap the pencil icon to create one.")
+            Text("No pages yet.")
                 .font(.caption)
                 .foregroundStyle(MacbotDS.Colors.textTer)
-                .fixedSize(horizontal: false, vertical: true)
+            KeyboardTeachBlock(rows: [
+                .init(keys: ["⌘", "N"], label: "New page"),
+                .init(keys: ["⌘", "/"], label: "All shortcuts"),
+            ])
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(MacbotDS.Space.md)
@@ -266,6 +311,12 @@ struct NotebookView: View {
             .onChange(of: viewModel.currentContent) { _, _ in
                 viewModel.scheduleContentSave()
             }
+            // Esc cascade (notebook): blur the editor so the mode's
+            // list-nav keys (↑/↓/j/k/n) become available.
+            .onKeyPress(.escape) {
+                contentFocused = false
+                return .handled
+            }
     }
 
     private var noPageState: some View {
@@ -302,5 +353,20 @@ struct NotebookView: View {
         }
         .padding(.horizontal, MacbotDS.Space.md)
         .padding(.vertical, MacbotDS.Space.sm)
+    }
+
+    /// Static relative-time label computed once per render. Replaces
+    /// `Text(date, style: .relative)` which auto-ticks every second —
+    /// a running timer on every page row is visual noise for no value,
+    /// and it thrashes SwiftUI diffing on long lists.
+    private static func updatedLabel(for date: Date) -> String {
+        let elapsed = Date().timeIntervalSince(date)
+        if elapsed < 60        { return "just now" }
+        if elapsed < 3600      { return "\(Int(elapsed / 60))m ago" }
+        if elapsed < 86400     { return "\(Int(elapsed / 3600))h ago" }
+        if elapsed < 604800    { return "\(Int(elapsed / 86400))d ago" }
+        let f = DateFormatter()
+        f.dateFormat = "MMM d"
+        return f.string(from: date)
     }
 }

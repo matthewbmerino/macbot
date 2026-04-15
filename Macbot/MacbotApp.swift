@@ -112,6 +112,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Retry until the SwiftUI Window scene has created the NSWindow
         func attempt(_ remaining: Int) {
             for window in NSApplication.shared.windows where window.title == "macbot" {
+                // Enable native macOS fullscreen — .hiddenTitleBar windows
+                // sometimes ship without .fullScreenPrimary which causes
+                // the green traffic light to just maximize instead of
+                // entering true fullscreen.
+                window.collectionBehavior.insert(.fullScreenPrimary)
                 window.makeKeyAndOrderFront(nil)
                 NSApplication.shared.activate(ignoringOtherApps: true)
                 return

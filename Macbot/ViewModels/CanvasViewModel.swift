@@ -33,6 +33,12 @@ final class CanvasViewModel {
 
     var selectedIds: Set<UUID> = []
     var editingNodeId: UUID?
+
+    /// Set when the user commits out of edit mode via ↩ / ⎋. While set, the
+    /// Excel-style "type on selection" handler skips this card so `n` can
+    /// create a NEW card and ⌘↩ can still expand the just-committed one.
+    /// Cleared on any other selection change (arrow nav, click, tab).
+    var justFinishedEditingId: UUID?
     var draggingNodeId: UUID?
     var hoveredNodeId: UUID?
     /// Source nodes currently waiting for AI results.
@@ -379,6 +385,7 @@ final class CanvasViewModel {
     // MARK: - Selection helpers
 
     func select(_ id: UUID, exclusive: Bool = true) {
+        justFinishedEditingId = nil
         if exclusive {
             selectedIds = [id]
         } else {
@@ -391,10 +398,12 @@ final class CanvasViewModel {
     }
 
     func selectAll() {
+        justFinishedEditingId = nil
         selectedIds = Set(nodes.map(\.id))
     }
 
     func clearSelection() {
+        justFinishedEditingId = nil
         selectedIds.removeAll()
         editingNodeId = nil
         editingEdgeId = nil
@@ -425,6 +434,7 @@ final class CanvasViewModel {
         }
 
         let target = sorted[nextIdx]
+        justFinishedEditingId = nil
         selectedIds = [target.id]
         centerOnNode(target)
     }
@@ -435,6 +445,7 @@ final class CanvasViewModel {
               let current = nodes.first(where: { $0.id == currentId }) else {
             // No selection — select first node
             if let first = nodes.first {
+                justFinishedEditingId = nil
                 selectedIds = [first.id]
                 centerOnNode(first)
             }
@@ -457,6 +468,7 @@ final class CanvasViewModel {
             directionScore(from: current, to: a, direction: direction)
                 < directionScore(from: current, to: b, direction: direction)
         }) else { return }
+        justFinishedEditingId = nil
 
         selectedIds = [best.id]
         centerOnNode(best)

@@ -187,9 +187,13 @@ extension CanvasViewModel {
                         )
 
                         for section in completedSections {
+                            // Provisional placement during streaming — use
+                            // assumedTotal=8 (median of the 5–12 prompt range).
+                            // A single re-layout at stream end snaps all cards
+                            // into their true final positions.
                             let pos = self.sectionPosition(
-                                index: sectionIndex, total: 10,
-                                centerX: cx + 340, centerY: cy
+                                index: sectionIndex, total: 8,
+                                centerX: cx, centerY: cy
                             )
                             let nodeId = self.createSectionCard(
                                 title: section.title,
@@ -222,7 +226,7 @@ extension CanvasViewModel {
                 for section in finalSections {
                     let pos = self.sectionPosition(
                         index: sectionIndex, total: max(sectionIndex + 1, finalSections.count),
-                        centerX: cx + 340, centerY: cy
+                        centerX: cx, centerY: cy
                     )
                     let nodeId = self.createSectionCard(
                         title: section.title,
@@ -236,7 +240,7 @@ extension CanvasViewModel {
 
                 // If no sections were created (short/simple response), create a single card
                 if createdNodeIds.isEmpty && !accumulated.isEmpty {
-                    let pos = CGPoint(x: cx + 340, y: cy)
+                    let pos = self.sectionPosition(index: 0, total: 1, centerX: cx, centerY: cy)
                     let nodeId = self.createSectionCard(
                         title: "",
                         content: accumulated.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -244,6 +248,14 @@ extension CanvasViewModel {
                         sourceIds: sourceIds
                     )
                     createdNodeIds.append(nodeId)
+                }
+
+                // Final re-layout with the true count now that streaming is
+                // done. During streaming we used assumedTotal=8; this pass
+                // snaps the whole cluster into its final shape in one
+                // animated step.
+                withAnimation(Motion.snappy) {
+                    self.relayoutCluster(ids: createdNodeIds, centerX: cx, centerY: cy)
                 }
 
                 // Select all new cards + source nodes, then zoom to show everything
@@ -254,8 +266,12 @@ extension CanvasViewModel {
                     withAnimation(Motion.smooth) {
                         self.zoomToSelection()
                     }
-                    // Then select only the new cards (not sources)
-                    self.selectedIds = Set(createdNodeIds)
+                    // Collapse to the first-created card so arrow-key nav has
+                    // a predictable anchor. Multi-select worked for the zoom,
+                    // but ↑/↓/←/→ navigate relative to a single node.
+                    if let first = createdNodeIds.first {
+                        self.selectedIds = [first]
+                    }
                 }
 
             } catch is CancellationError {
@@ -383,25 +399,71 @@ extension CanvasViewModel {
         return nodeId
     }
 
-    /// Position for the Nth section card — clean 2-column grid to the right of source.
-    /// Wide spacing prevents overlap. Cards flow top-to-bottom, left-to-right.
+    /// Position for the Nth section card — asymmetric horizontal fan.
+    ///
+    /// The council-of-thought layout: source stays put, children fan to the
+    /// right in count-adaptive columns. Column stagger breaks the grid
+    /// rigidity so it reads as a knowledge network, not a spreadsheet.
+    ///
+    /// Count → shape:
+    ///   1–4  cards → single column            (640pt tall max)
+    ///   5–8  cards → two columns              (≤1040pt tall)
+    ///   9–12 cards → three columns            (≤1040pt tall, 920pt wide)
+    ///
+    /// Bbox for 12 cards = ~920×1040 — fits a 1600×900 viewport at 1× zoom,
+    /// vs. today's 2-col × 6-row = 1800pt tall which forced zoom-out.
+    ///
+    /// `centerX` and `centerY` are the source card's center. Children are
+    /// vertically centered around `centerY` so the cluster looks balanced
+    /// regardless of count.
     private func sectionPosition(index: Int, total: Int, centerX: CGFloat, centerY: CGFloat) -> CGPoint {
-        let cols = min(total > 4 ? 2 : 1, 2)  // 1 column for ≤4 cards, 2 for more
-        let colSpacing: CGFloat = 360          // 280pt card + 80pt gap
-        let rowSpacing: CGFloat = 300          // generous vertical gap for tall cards
+        let cols: Int
+        switch total {
+        case ..<5:  cols = 1
+        case 5...8: cols = 2
+        default:    cols = 3
+        }
+
+        let colSpacing: CGFloat = 340          // 280pt card + 60pt gutter
+        let rowSpacing: CGFloat = 260          // tighter than old 300pt
+        let columnStagger: CGFloat = 130       // every other col nudged down
+        // Right-edge of source sits at centerX + (sourceWidth/2). Leave a
+        // 380pt gap between source right-edge and first child col-centerline
+        // so the connector line has breathing room.
+        let firstColX = centerX + 380
 
         let col = index % cols
         let row = index / cols
+        let rowsInThisCol: Int = {
+            // Cards distributed round-robin: col c gets indices c, c+cols, c+2*cols, ...
+            // Count of cards in column c = (total - c + cols - 1) / cols
+            return (total - col + cols - 1) / cols
+        }()
 
-        let totalRows = CGFloat((total + cols - 1) / cols)
-
-        // Start from top, offset right of source — don't center over it
-        let startY = centerY - (totalRows - 1) * rowSpacing / 2
+        // Vertical center each column on source Y; odd columns are nudged
+        // down by columnStagger/2 so they interleave with even columns.
+        let columnTopY = centerY - CGFloat(rowsInThisCol - 1) * rowSpacing / 2
+        let staggerOffset = (col % 2 == 1) ? columnStagger : 0
 
         return CGPoint(
-            x: centerX + CGFloat(col) * colSpacing,
-            y: startY + CGFloat(row) * rowSpacing
+            x: firstColX + CGFloat(col) * colSpacing,
+            y: columnTopY + CGFloat(row) * rowSpacing + staggerOffset
         )
+    }
+
+    /// Re-lay out a freshly-generated cluster of children with the actual
+    /// final count known. Call once at stream-end — during streaming we use
+    /// an assumed total=8, which can leave columns under- or over-filled.
+    /// This single animated pass snaps the whole cluster into its final
+    /// shape before zoomToSelection fires.
+    private func relayoutCluster(ids: [UUID], centerX: CGFloat, centerY: CGFloat) {
+        guard ids.count > 3 else { return }   // 1-3 cards: single column is already correct
+        for (i, id) in ids.enumerated() {
+            guard let idx = nodes.firstIndex(where: { $0.id == id }) else { continue }
+            nodes[idx].position = sectionPosition(
+                index: i, total: ids.count, centerX: centerX, centerY: centerY
+            )
+        }
     }
 
     // MARK: - Widget Execute (in-place response)
@@ -1229,6 +1291,9 @@ extension CanvasViewModel {
     /// Zoom by a factor, keeping the given anchor point (in view coords) fixed on screen.
     /// Pass `animated: true` for discrete mouse-wheel steps to get a brief spring animation.
     func zoom(by factor: CGFloat, anchor: CGPoint, animated: Bool = false) {
+        // Same reason as handleTrackpadPan — cards move under the cursor,
+        // hover-exit event doesn't fire, border sticks. Clear proactively.
+        hoveredNodeId = nil
         let apply = {
             let newScale = min(max(self.scale * factor, 0.15), 5.0)
             let canvasPoint = CGPoint(
@@ -1258,6 +1323,12 @@ extension CanvasViewModel {
         offset.width += deltaX
         offset.height += deltaY
         lastCommittedOffset = offset
+        // Cards move under the cursor during pan — SwiftUI's .onHover is
+        // unreliable at catching the exit event when the view itself moves
+        // (only fires on cursor movement). Clear explicitly so the hover
+        // border doesn't get stuck on a card that's no longer under the
+        // cursor.
+        hoveredNodeId = nil
     }
 
     /// Zoom to fit all nodes in the viewport.
@@ -1290,7 +1361,10 @@ extension CanvasViewModel {
     func zoomToSelection() {
         let selected = nodes.filter { selectedIds.contains($0.id) }
         guard !selected.isEmpty else { return }
-        let padding: CGFloat = 120
+        // Bumped from 120pt: radial/fan clusters need more breathing room
+        // than a tight grid — otherwise the outer cards touch the viewport
+        // edge and the connector lines run off the visible canvas.
+        let padding: CGFloat = 160
         let minX = selected.map(\.position.x).min()! - padding
         let maxX = selected.map { $0.position.x + $0.width }.max()! + padding
         let minY = selected.map(\.position.y).min()! - padding

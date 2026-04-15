@@ -112,7 +112,7 @@ struct CanvasNode: Identifiable, Equatable {
             case .idea:      return 0.13
             case .task:      return 0.58
             case .reference: return 0.75
-            case .ai:        return 0.35
+            case .ai:        return 0.58  // same blue band as .task — matches the app accent
             }
         }
 

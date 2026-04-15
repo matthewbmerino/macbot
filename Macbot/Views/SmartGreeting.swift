@@ -41,6 +41,15 @@ struct SmartGreeting: View {
                 .opacity(showTip ? 1 : 0)
                 .offset(y: showTip ? 0 : 4)
 
+            // Keyboard teaching block — the "this is a keyboard app" moment.
+            KeyboardTeachBlock(rows: [
+                .init(keys: ["⌘", "N"], label: "New chat"),
+                .init(keys: ["⌘", "K"], label: "Anything, anywhere"),
+                .init(keys: ["⌘", "/"], label: "All keyboard shortcuts"),
+            ])
+            .frame(maxWidth: 300)
+            .opacity(showTip ? 1 : 0)
+
             // Privacy line
             HStack(spacing: 6) {
                 Image(systemName: "lock.fill")

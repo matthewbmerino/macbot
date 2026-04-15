@@ -12,7 +12,21 @@ struct PaletteItem: Identifiable {
     let subtitle: String?
     let icon: String
     let category: Category
+    /// Optional keyboard shortcut rendered as a trailing KBDChip. When set,
+    /// the palette teaches the chord as a side-effect of every search.
+    let shortcut: [String]?
     let action: () -> Void
+
+    init(id: String, title: String, subtitle: String? = nil, icon: String,
+         category: Category, shortcut: [String]? = nil, action: @escaping () -> Void) {
+        self.id = id
+        self.title = title
+        self.subtitle = subtitle
+        self.icon = icon
+        self.category = category
+        self.shortcut = shortcut
+        self.action = action
+    }
 
     enum Category: Int, Comparable {
         case action   = 0 // Switch modes, New <thing>
@@ -193,6 +207,10 @@ struct CommandPalette: View {
                 }
             }
             Spacer()
+            if let keys = item.shortcut {
+                KBDChip(keys: keys)
+                    .opacity(isSelected ? 1.0 : 0.7)
+            }
         }
         .padding(.horizontal, MacbotDS.Space.md)
         .padding(.vertical, MacbotDS.Space.sm)

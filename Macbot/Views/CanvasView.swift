@@ -139,6 +139,7 @@ struct CanvasView: View {
             .background(MacbotDS.Colors.bg)
             .focusable()
             .focused($canvasFocused)
+            .focusEffectDisabled()
             .onAppear {
                 canvasFocused = true
                 CanvasBridge.shared.register(viewModel)
@@ -234,14 +235,53 @@ struct CanvasView: View {
                 executeSelectedNodes()
                 return .handled
             }
-            // Quick add shortcuts (only when no text input is active)
-            .onKeyPress(characters: CharacterSet(charactersIn: "ntre/m?")) { press in
+            // Excel-style "type on selection": when exactly one card is
+            // selected and not editing, any printable key enters edit mode
+            // for that card and appends the typed character. Runs BEFORE
+            // the quick-add handler so `n` / `t` / `r` on a selected card
+            // type those letters instead of firing the create shortcuts.
+            .onKeyPress(phases: .down) { press in
+                guard !isTextInputActive,
+                      press.modifiers.isDisjoint(with: [.command, .control, .option]),
+                      viewModel.selectedIds.count == 1,
+                      let selectedId = viewModel.selectedIds.first,
+                      viewModel.editingNodeId == nil,
+                      // Skip the card that was just committed out of edit
+                      // mode — user pressing `n` there means "new card",
+                      // not "append to the one I just finished."
+                      viewModel.justFinishedEditingId != selectedId,
+                      let idx = viewModel.nodes.firstIndex(where: { $0.id == selectedId })
+                else { return .ignored }
+                let chars = press.characters
+                guard chars.count == 1, let scalar = chars.unicodeScalars.first else {
+                    return .ignored
+                }
+                // Printable-only: letters, digits, punctuation, space. Skip
+                // control keys and reserved shortcut characters — `/` still
+                // opens the AI bar, `?` the shortcut help, `m` the minimap.
+                let isPrintable = scalar.properties.isAlphabetic
+                    || CharacterSet.decimalDigits.contains(scalar)
+                    || CharacterSet.punctuationCharacters.contains(scalar)
+                    || CharacterSet.symbols.contains(scalar)
+                    || scalar == " "
+                guard isPrintable else { return .ignored }
+                let reservedTools: Set<Character> = ["/", "?", "m", "e"]
+                if let first = chars.first, reservedTools.contains(first) {
+                    return .ignored
+                }
+                viewModel.nodes[idx].text.append(chars)
+                viewModel.editingNodeId = selectedId
+                return .handled
+            }
+            // Quick add + tool toggles (only when no text input is active).
+            // `n` is the single "new card" key — creates a .note (default).
+            // Users who want a task/idea/reference color cycle via ⇧Tab
+            // after creation; one create verb keeps the keyboard uncluttered.
+            .onKeyPress(characters: CharacterSet(charactersIn: "ne/m?")) { press in
                 guard !isTextInputActive else { return .ignored }
                 guard !press.modifiers.contains(.command) else { return .ignored }
                 switch press.characters {
                 case "n": quickAdd(color: .note); return .handled
-                case "t": quickAdd(color: .task); return .handled
-                case "r": quickAdd(color: .reference); return .handled
                 case "e":
                     viewModel.edgeModeActive.toggle()
                     return .handled
@@ -371,6 +411,26 @@ struct CanvasView: View {
             if viewModel.showShortcutHelp {
                 shortcutHelpOverlay
                     .transition(.opacity)
+            }
+        }
+        .overlay(alignment: .center) {
+            // First-launch teaching moment: empty canvas shows the keyboard
+            // promise. Disappears as soon as the user has any node.
+            if viewModel.nodes.isEmpty {
+                VStack(spacing: MacbotDS.Space.md) {
+                    Text("Blank canvas")
+                        .font(MacbotDS.Typo.title)
+                        .foregroundStyle(MacbotDS.Colors.textSec)
+                    KeyboardTeachBlock(rows: [
+                        .init(keys: ["N"], label: "New card"),
+                        .init(keys: ["/"], label: "Ask AI"),
+                        .init(keys: ["⇧", "⇥"], label: "Cycle color"),
+                        .init(keys: ["⌘", "/"], label: "All shortcuts"),
+                    ])
+                    .frame(width: 260)
+                }
+                .allowsHitTesting(false)
+                .transition(.opacity)
             }
         }
     }
@@ -517,7 +577,7 @@ struct CanvasView: View {
                         Text("AI Generated")
                             .font(.system(size: 11, weight: .medium))
                     }
-                    .foregroundStyle(Color(hue: 0.35, saturation: 0.5, brightness: 0.8))
+                    .foregroundStyle(MacbotDS.Colors.accent)
                 } else {
                     Text(nodeColor.rawValue.capitalized)
                         .font(.system(size: 11, weight: .semibold))
@@ -768,6 +828,21 @@ struct CanvasView: View {
             onDeleteKey: {
                 guard !isTextInputActive, !viewModel.selectedIds.isEmpty else { return }
                 withAnimation(Motion.snappy) { viewModel.deleteSelected() }
+            },
+            onArrowKey: { dx, dy in
+                guard !isTextInputActive else { return }
+                let direction: CanvasViewModel.NavigationDirection? = {
+                    if dx < 0 { return .left }
+                    if dx > 0 { return .right }
+                    if dy < 0 { return .up }
+                    if dy > 0 { return .down }
+                    return nil
+                }()
+                if let d = direction { viewModel.navigateDirection(d) }
+            },
+            onTabKey: { forward in
+                guard !isTextInputActive else { return }
+                viewModel.navigateNode(forward: forward)
             },
             isSpacebarDown: viewModel.isSpacebarDown,
             isEdgeModeActive: viewModel.edgeModeActive || viewModel.pendingEdgeFromId != nil
@@ -1194,6 +1269,16 @@ struct CanvasView: View {
                 scale: viewModel.scale,
                 onTextChange: { viewModel.updateText(id: node.id, text: $0) },
                 onCommitEdit: { viewModel.editingNodeId = nil },
+                onFinishEditing: {
+                    // Commit + keep selection so ⌘↩ can still fire the AI
+                    // expand on the just-committed card. The "just finished"
+                    // flag tells the type-on-selection handler to skip this
+                    // card so `n` still creates a new card instead of
+                    // appending to this one.
+                    let justEditedId = viewModel.editingNodeId
+                    viewModel.editingNodeId = nil
+                    viewModel.justFinishedEditingId = justEditedId
+                },
                 onStartEdge: { viewModel.pendingEdgeFromId = node.id },
                 onExecute: {
                     viewModel.select(node.id)
@@ -1476,14 +1561,19 @@ struct CanvasView: View {
                 guard viewModel.entered3DNodeId != node.id else { return }
                 let dist = hypot(value.translation.width, value.translation.height)
                 if dist > 4 {
-                    // Only move the card if it was already selected. Dragging
-                    // on an unselected card used to start a move immediately,
-                    // which made canvas-panning over cards impossible — the
-                    // card would get grabbed instead. Requiring selection
-                    // first gives a deliberate "I mean to move this" step.
-                    guard viewModel.selectedIds.contains(node.id) else { return }
+                    // Spacebar + drag is reserved for canvas panning, so don't
+                    // grab the card in that mode. Trackpad two-finger pan over
+                    // cards is handled by CanvasScrollHandler's NSEvent monitor,
+                    // so a bare mouse drag on a card can move it immediately —
+                    // no "click first to select" step required.
+                    guard !viewModel.isSpacebarDown else { return }
                     if viewModel.draggingNodeId == nil {
                         viewModel.draggingNodeId = node.id
+                        // Auto-select on drag-start so the moved card ends up
+                        // selected and any multi-select math operates on it.
+                        if !viewModel.selectedIds.contains(node.id) {
+                            viewModel.select(node.id, exclusive: true)
+                        }
                         viewModel.beginDrag(anchorId: node.id)
                     }
                     let newCanvas = viewModel.viewToCanvas(value.location)
@@ -2302,9 +2392,8 @@ struct CanvasView: View {
                     ])
 
                     shortcutColumn("Editing", shortcuts: [
-                        ("N", "New note"),
-                        ("T", "New task"),
-                        ("R", "New reference"),
+                        ("N", "New card"),
+                        ("⇧+Tab", "Cycle card color"),
                         ("Double-click", "Edit node / Add node"),
                         ("Delete / Backspace", "Delete selected"),
                         ("Cmd+D", "Duplicate"),

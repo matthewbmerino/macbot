@@ -20,6 +20,10 @@ final class NotebookViewModel {
     var currentNotebookId: String?
     var currentPageId: String?
 
+    /// Whether the leftmost "Notebooks" pane is visible. Toggled by the
+    /// notebook rail icon click when already in notebook mode.
+    var notebooksPaneVisible = true
+
     /// Live editor buffers — the source of truth while a page is open. Flushed
     /// to the store via debounced save tasks. The store round-trips when the
     /// user switches pages so these stay authoritative.

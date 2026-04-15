@@ -12,6 +12,11 @@ struct CanvasNodeView: View {
     let scale: CGFloat
     var onTextChange: (String) -> Void
     var onCommitEdit: () -> Void
+    /// Like onCommitEdit but also clears selection. Used for plain ↩ and ⎋
+    /// so the next quick-add key (`n` / `t` / `r`) creates a new card
+    /// instead of being absorbed into the just-edited card via the
+    /// "type on selection" handler.
+    var onFinishEditing: () -> Void = {}
     var onStartEdge: () -> Void
     var onExecute: () -> Void = {}
     var onWidgetExecute: () -> Void = {}
@@ -111,6 +116,13 @@ struct CanvasNodeView: View {
                         .onAppear {
                             localText = node.text
                             textFocused = true
+                            // SwiftUI focus race: the canvas view also holds
+                            // focus, and its handler wins intermittently when
+                            // edit mode is entered via a keypress rather than
+                            // a click. Retry on the next runloop tick so the
+                            // TextEditor reliably gets focus — otherwise the
+                            // insertion caret never appears.
+                            DispatchQueue.main.async { textFocused = true }
                             installKeyMonitor()
                             // Always start collapsed when editing so card stays compact after commit
                             isExpanded = false
@@ -128,7 +140,7 @@ struct CanvasNodeView: View {
 
                     // Subtle keyboard hint
                     HStack(spacing: 6) {
-                        Text("↩ Answer  ·  ⌘↩ Expand")
+                        Text("↩ Done  ·  ⌘↩ Ask AI  ·  ⇧↩ Newline")
                             .font(.system(size: 9))
                             .foregroundStyle(MacbotDS.Colors.textTer.opacity(0.6))
                         Spacer()
@@ -322,13 +334,17 @@ struct CanvasNodeView: View {
 
     private var borderColor: Color {
         if isAIStreaming { return MacbotDS.Colors.accent }
-        if isSelected { return nodeAccent }
+        if isSelected { return MacbotDS.Colors.accent }
+        // Hover is deliberately subtle — a faint accent at low opacity —
+        // so it doesn't read as selection. Selection is the strong signal.
+        if isHovered { return MacbotDS.Colors.accent.opacity(0.35) }
         return MacbotDS.Colors.separator
     }
 
     private var borderWidth: CGFloat {
         if isAIStreaming { return 2.0 }
         if isSelected { return 1.5 }
+        if isHovered { return 0.75 }
         return 0.5
     }
 
@@ -369,7 +385,7 @@ struct CanvasNodeView: View {
         HStack(spacing: MacbotDS.Space.sm) {
             Image(systemName: "sparkles")
                 .font(.system(size: 11))
-                .foregroundStyle(Color(hue: 0.35, saturation: 0.6, brightness: 0.85))
+                .foregroundStyle(MacbotDS.Colors.accent)
             Text(origin.action.capitalized)
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(MacbotDS.Colors.textPri)
@@ -406,6 +422,13 @@ struct CanvasNodeView: View {
             // Only intercept while this card is the editing target
             guard isEditing, textFocused else { return event }
 
+            // Escape (keyCode 53) — commit text, exit edit mode, AND
+            // deselect. No AI. The quiet "done" key.
+            if event.keyCode == 53 {
+                onFinishEditing()
+                return nil
+            }
+
             // Return key (keyCode 36)
             if event.keyCode == 36 {
                 let cmdHeld = event.modifierFlags.contains(.command)
@@ -414,11 +437,16 @@ struct CanvasNodeView: View {
                     // Shift+Return = newline (let TextEditor handle)
                     return event
                 }
-                onCommitEdit()
                 if cmdHeld {
-                    onExecute()        // ⌘↩ = expand (knowledge graph)
+                    // ⌘↩ = AI expand — keep selection so the AI flow can
+                    // expand this node. The AI flow manages selection itself.
+                    onCommitEdit()
+                    onExecute()
                 } else {
-                    onWidgetExecute()  // ↩ = widget (in-place answer)
+                    // Bare ↩ = done editing + deselect. Next keypress (`n`,
+                    // `t`, `r`) creates a new card instead of getting
+                    // absorbed into this one.
+                    onFinishEditing()
                 }
                 return nil  // consume
             }
@@ -517,7 +545,7 @@ struct CanvasNodeView: View {
             Text("Generated")
         }
         .font(.system(size: 9))
-        .foregroundStyle(Color(hue: 0.35, saturation: 0.4, brightness: 0.7))
+        .foregroundStyle(MacbotDS.Colors.accent.opacity(0.75))
     }
 
     // MARK: - Styling

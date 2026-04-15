@@ -7,12 +7,25 @@ struct ChatView: View {
     @FocusState private var inputFocused: Bool
     @State private var dragOver = false
     @State private var livePulse = false
+    // Inline rename state for the canvas sidebar. Double-clicking a canvas
+    // row sets this to that canvas's id; the row renders a TextField instead
+    // of a label until Esc or return.
+    @State private var renamingCanvasId: String?
+    @State private var canvasRenameField: String = ""
 
     var body: some View {
-        HStack(spacing: 0) {
-            modeRail
-            Divider()
-            modeContent
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                modeRail
+                Divider()
+                modeContent
+            }
+            if viewModel.showHintBar {
+                HintBar(mode: viewModel.contentMode) {
+                    viewModel.showHintBar = false
+                }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
         }
         .overlay {
             // Command palette — the universal keyboard-first nav surface.
@@ -24,6 +37,13 @@ struct ChatView: View {
                     onSelect: dispatchPaletteItem,
                     onDismiss: { viewModel.showPalette = false }
                 )
+                .transition(.opacity.combined(with: .scale(scale: 0.98)))
+            }
+            // Global cheat sheet — ⌘/ from anywhere, any mode.
+            if viewModel.showCheatSheet {
+                CheatSheetOverlay(mode: viewModel.contentMode) {
+                    withAnimation(Motion.snappy) { viewModel.showCheatSheet = false }
+                }
                 .transition(.opacity.combined(with: .scale(scale: 0.98)))
             }
         }
@@ -48,11 +68,7 @@ struct ChatView: View {
         case .chat:
             chatModeLayout
         case .canvas:
-            CanvasView(
-                viewModel: viewModel.canvasViewModel,
-                loadMessages: { viewModel.loadMessagesForCanvas(chatId: $0) },
-                orchestrator: viewModel.canvasOrchestrator
-            )
+            canvasModeLayout
         case .notebook:
             NotebookView(viewModel: viewModel.notebookViewModel)
         }
@@ -70,6 +86,61 @@ struct ChatView: View {
             }
             chatContent
         }
+        // Keyboard grammar for chat: ↑/↓/j/k navigate list, ↩ opens,
+        // `n` starts a new chat. All gated on "not typing" so the composer
+        // keeps bare letters for text input.
+        .onKeyPress(.upArrow)   { chatListMove(by: -1) ? .handled : .ignored }
+        .onKeyPress(.downArrow) { chatListMove(by: +1) ? .handled : .ignored }
+        .onKeyPress(characters: CharacterSet(charactersIn: "jknN")) { press in
+            guard !AppFocus.isTextInputActive() else { return .ignored }
+            guard !press.modifiers.contains(.command) else { return .ignored }
+            switch press.characters {
+            case "j": return chatListMove(by: +1) ? .handled : .ignored
+            case "k": return chatListMove(by: -1) ? .handled : .ignored
+            case "n", "N":
+                viewModel.newChat()
+                return .handled
+            default: return .ignored
+            }
+        }
+    }
+
+    /// Move chat list selection by delta. Returns true if the key should be
+    /// consumed. Never fires while the composer or any text field is focused
+    /// — arrow keys there are for cursor movement inside the text.
+    @discardableResult
+    private func chatListMove(by delta: Int) -> Bool {
+        guard !AppFocus.isTextInputActive() else { return false }
+        let chats = viewModel.chats
+        guard !chats.isEmpty else { return false }
+        let currentIdx = chats.firstIndex(where: { $0.id == viewModel.currentChatId })
+        let nextIdx: Int
+        if let currentIdx {
+            nextIdx = min(max(currentIdx + delta, 0), chats.count - 1)
+        } else {
+            nextIdx = delta > 0 ? 0 : chats.count - 1
+        }
+        viewModel.selectChat(chats[nextIdx].id)
+        return true
+    }
+
+    /// Canvas mode with an optional left-side list of canvases. Same shape as
+    /// chatModeLayout — Cmd+\\ toggles visibility, the panel owns its own
+    /// new-canvas affordance and rename/delete context menu.
+    private var canvasModeLayout: some View {
+        HStack(spacing: 0) {
+            if viewModel.canvasListVisible {
+                canvasListPanel
+                    .frame(width: 240)
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+                Divider()
+            }
+            CanvasView(
+                viewModel: viewModel.canvasViewModel,
+                loadMessages: { viewModel.loadMessagesForCanvas(chatId: $0) },
+                orchestrator: viewModel.canvasOrchestrator
+            )
+        }
     }
 
     // MARK: - Mode Rail (always visible, 44pt)
@@ -84,11 +155,7 @@ struct ChatView: View {
                 mode: .notebook,
                 help: "Notebook (⌘1)"
             )
-            railButton(
-                icon: "rectangle.on.rectangle.angled",
-                mode: .canvas,
-                help: "Canvas (⌘2)"
-            )
+            canvasRailMenu
             railButton(
                 icon: "bubble.left.and.text.bubble.right",
                 mode: .chat,
@@ -116,11 +183,67 @@ struct ChatView: View {
         .background(MacbotDS.Mat.chrome)
     }
 
+    /// Canvas rail button — plain button for "switch to canvas", with a
+    /// right-click (contextMenu) for layout options. Avoids the Menu+
+    /// primaryAction quirks and makes a single click behave the same as
+    /// the notebook / chat rail buttons.
+    private var canvasRailMenu: some View {
+        let isActive = viewModel.contentMode == .canvas
+        return Button(action: {
+            withAnimation(Motion.snappy) {
+                if isActive {
+                    viewModel.toggleSecondaryPane()
+                } else {
+                    switchMode(to: .canvas)
+                }
+            }
+        }) {
+            Image(systemName: "rectangle.on.rectangle.angled")
+                .font(.system(size: 14))
+                .foregroundStyle(isActive ? MacbotDS.Colors.textPri : MacbotDS.Colors.textTer)
+                .frame(width: 32, height: 32)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(isActive ? AnyShapeStyle(MacbotDS.Colors.accent.opacity(0.18)) : AnyShapeStyle(.clear))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(isActive ? MacbotDS.Colors.accent.opacity(0.35) : .clear, lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .help("Canvas (⌘2) — right-click for layout")
+        .contextMenu {
+            Button {
+                withAnimation(Motion.snappy) {
+                    viewModel.canvasListVisible = true
+                    switchMode(to: .canvas)
+                }
+            } label: {
+                Label("Canvas with sidebar", systemImage: "sidebar.left")
+            }
+            Button {
+                withAnimation(Motion.snappy) {
+                    viewModel.canvasListVisible = false
+                    switchMode(to: .canvas)
+                }
+            } label: {
+                Label("Full canvas", systemImage: "rectangle.expand.vertical")
+            }
+        }
+    }
+
     private func railButton(icon: String, mode: ContentMode, help: String) -> some View {
         let isActive = viewModel.contentMode == mode
         return Button(action: {
             withAnimation(Motion.snappy) {
-                switchMode(to: mode)
+                // Click while already on this mode toggles that mode's
+                // sidebar panel; click from another mode switches into it.
+                if isActive {
+                    viewModel.toggleSecondaryPane()
+                } else {
+                    switchMode(to: mode)
+                }
             }
         }) {
             Image(systemName: icon)
@@ -172,9 +295,31 @@ struct ChatView: View {
                 withAnimation(Motion.snappy) { viewModel.toggleSecondaryPane() }
             }
             .keyboardShortcut(.init("\\"), modifiers: .command)
+            // ⌘/ — global cheat sheet. Works in any mode. This is the
+            // single discoverability key new users learn first.
+            Button("") {
+                withAnimation(Motion.snappy) { viewModel.showCheatSheet.toggle() }
+            }
+            .keyboardShortcut(.init("/"), modifiers: .command)
+            // ⌘N — "new in this mode." One key, mode supplies the noun.
+            Button("") { createInCurrentMode() }
+                .keyboardShortcut(.init("n"), modifiers: .command)
         }
         .frame(width: 0, height: 0)
         .hidden()
+    }
+
+    /// Dispatch ⌘N to the right "new" verb for the current mode.
+    /// Enforces the "verbs are global, nouns are mode-supplied" principle.
+    private func createInCurrentMode() {
+        switch viewModel.contentMode {
+        case .chat:
+            viewModel.newChat()
+        case .canvas:
+            viewModel.canvasViewModel.createCanvas()
+        case .notebook:
+            viewModel.notebookViewModel.createPageInCurrentNotebook()
+        }
     }
 
     // MARK: - Chat list panel (owned by chat mode)
@@ -242,6 +387,114 @@ struct ChatView: View {
         .background(MacbotDS.Mat.chrome)
     }
 
+    // MARK: - Canvas list panel (owned by canvas mode)
+
+    /// Mirrors chatListPanel: a left-side list of canvases with a new-canvas
+    /// button in the header and rename/delete in each row's context menu.
+    private var canvasListPanel: some View {
+        let canvasVM = viewModel.canvasViewModel
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Canvases")
+                    .font(.caption2.weight(.bold))
+                    .kerning(0.5)
+                    .foregroundStyle(MacbotDS.Colors.textTer)
+                    .textCase(.uppercase)
+                Spacer()
+                Button(action: { canvasVM.createCanvas() }) {
+                    Image(systemName: "square.and.pencil")
+                        .font(.caption)
+                        .foregroundStyle(MacbotDS.Colors.textSec)
+                }
+                .buttonStyle(.plain)
+                .help("New Canvas")
+            }
+            .padding(.horizontal, MacbotDS.Space.md)
+            .padding(.vertical, MacbotDS.Space.sm)
+
+            Divider()
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 1) {
+                    ForEach(canvasVM.canvasList) { canvas in
+                        canvasRow(canvas)
+                    }
+                }
+                .padding(.vertical, MacbotDS.Space.xs)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .background(MacbotDS.Mat.chrome)
+    }
+
+    @ViewBuilder
+    private func canvasRow(_ canvas: CanvasRecord) -> some View {
+        let canvasVM = viewModel.canvasViewModel
+        let isActive = canvasVM.currentCanvasId == canvas.id
+        let isRenaming = renamingCanvasId == canvas.id
+
+        HStack(spacing: MacbotDS.Space.sm) {
+            Image(systemName: "rectangle.on.rectangle.angled")
+                .font(.caption)
+                .foregroundStyle(isActive ? MacbotDS.Colors.accent : MacbotDS.Colors.textTer)
+                .frame(width: 16)
+            if isRenaming {
+                TextField("Canvas name", text: $canvasRenameField)
+                    .textFieldStyle(.plain)
+                    .font(.callout)
+                    .foregroundStyle(MacbotDS.Colors.textPri)
+                    .onSubmit {
+                        let trimmed = canvasRenameField.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !trimmed.isEmpty {
+                            canvasVM.renameCanvas(canvas.id, title: trimmed)
+                        }
+                        renamingCanvasId = nil
+                    }
+                    .onKeyPress(.escape) {
+                        renamingCanvasId = nil
+                        return .handled
+                    }
+            } else {
+                Text(canvas.title)
+                    .font(.callout)
+                    .foregroundStyle(isActive ? MacbotDS.Colors.textPri : MacbotDS.Colors.textSec)
+                    .lineLimit(1)
+                Spacer()
+            }
+        }
+        .padding(.horizontal, MacbotDS.Space.md)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: MacbotDS.Radius.sm, style: .continuous)
+                .fill(isActive ? AnyShapeStyle(MacbotDS.Colors.accent.opacity(0.12)) : AnyShapeStyle(.clear))
+                .padding(.horizontal, MacbotDS.Space.xs)
+        )
+        .contentShape(Rectangle())
+        // Double-click first so it takes priority — single click selects,
+        // a second click switches into inline rename mode (Finder-style).
+        .onTapGesture(count: 2) {
+            canvasRenameField = canvas.title
+            renamingCanvasId = canvas.id
+        }
+        .onTapGesture {
+            guard !isRenaming else { return }
+            canvasVM.switchCanvas(canvas.id)
+        }
+        .contextMenu {
+            Button("Rename") {
+                canvasRenameField = canvas.title
+                renamingCanvasId = canvas.id
+            }
+            if canvasVM.canvasList.count > 1 {
+                Divider()
+                Button("Delete", role: .destructive) {
+                    canvasVM.deleteCanvas(canvas.id)
+                }
+            }
+        }
+    }
+
     // MARK: - Palette items & dispatch
 
     /// Build the palette's search corpus on demand. Includes every navigable
@@ -249,25 +502,38 @@ struct ChatView: View {
     private var paletteItems: [PaletteItem] {
         var items: [PaletteItem] = []
 
-        // Actions — mode switches and create-new verbs.
+        // Actions — mode switches and create-new verbs. Every action row
+        // carries its shortcut as a KBDChip so the palette teaches the
+        // chord as a side-effect of searching.
         items.append(PaletteItem(
             id: "act:mode.notebook", title: "Switch to Notebook",
-            subtitle: "⌘1", icon: "book.closed", category: .action,
+            icon: "book.closed", category: .action, shortcut: ["⌘", "1"],
             action: { withAnimation(Motion.snappy) { switchMode(to: .notebook) } }
         ))
         items.append(PaletteItem(
             id: "act:mode.canvas", title: "Switch to Canvas",
-            subtitle: "⌘2", icon: "rectangle.on.rectangle.angled", category: .action,
+            icon: "rectangle.on.rectangle.angled", category: .action, shortcut: ["⌘", "2"],
             action: { withAnimation(Motion.snappy) { switchMode(to: .canvas) } }
         ))
         items.append(PaletteItem(
             id: "act:mode.chat", title: "Switch to Chat",
-            subtitle: "⌘3", icon: "bubble.left.and.text.bubble.right", category: .action,
+            icon: "bubble.left.and.text.bubble.right", category: .action, shortcut: ["⌘", "3"],
             action: { withAnimation(Motion.snappy) { switchMode(to: .chat) } }
         ))
         items.append(PaletteItem(
+            id: "act:cheatsheet", title: "Keyboard cheat sheet",
+            icon: "keyboard", category: .action, shortcut: ["⌘", "/"],
+            action: { withAnimation(Motion.snappy) { viewModel.showCheatSheet = true } }
+        ))
+        items.append(PaletteItem(
+            id: "act:toggle.sidebar", title: "Toggle sidebar",
+            icon: "sidebar.left", category: .action, shortcut: ["⌘", "\\"],
+            action: { withAnimation(Motion.snappy) { viewModel.toggleSecondaryPane() } }
+        ))
+        items.append(PaletteItem(
             id: "act:new.page", title: "New Page",
-            subtitle: "In the current notebook", icon: "doc.badge.plus", category: .action,
+            subtitle: "In the current notebook", icon: "doc.badge.plus",
+            category: .action, shortcut: viewModel.contentMode == .notebook ? ["⌘", "N"] : nil,
             action: {
                 switchMode(to: .notebook)
                 viewModel.notebookViewModel.createPageInCurrentNotebook()
@@ -275,7 +541,7 @@ struct ChatView: View {
         ))
         items.append(PaletteItem(
             id: "act:new.notebook", title: "New Notebook",
-            subtitle: nil, icon: "book.closed", category: .action,
+            icon: "book.closed", category: .action,
             action: {
                 switchMode(to: .notebook)
                 viewModel.notebookViewModel.createNotebook()
@@ -283,7 +549,8 @@ struct ChatView: View {
         ))
         items.append(PaletteItem(
             id: "act:new.canvas", title: "New Canvas",
-            subtitle: nil, icon: "plus.rectangle.on.rectangle", category: .action,
+            icon: "plus.rectangle.on.rectangle",
+            category: .action, shortcut: viewModel.contentMode == .canvas ? ["⌘", "N"] : nil,
             action: {
                 switchMode(to: .canvas)
                 viewModel.canvasViewModel.createCanvas()
@@ -291,7 +558,8 @@ struct ChatView: View {
         ))
         items.append(PaletteItem(
             id: "act:new.chat", title: "New Chat",
-            subtitle: nil, icon: "square.and.pencil", category: .action,
+            icon: "square.and.pencil",
+            category: .action, shortcut: viewModel.contentMode == .chat ? ["⌘", "N"] : nil,
             action: {
                 switchMode(to: .chat)
                 viewModel.newChat()
@@ -652,6 +920,16 @@ struct ChatView: View {
                 .lineLimit(1...6)
                 .focused($inputFocused)
                 .onSubmit { sendMessage() }
+                // Esc cascade (chat): stop streaming → blur composer. After
+                // blur, the mode's list-nav keys (↑/↓/j/k/n) become available.
+                .onKeyPress(.escape) {
+                    if viewModel.isStreaming {
+                        viewModel.cancelStream()
+                    } else {
+                        inputFocused = false
+                    }
+                    return .handled
+                }
 
                 if viewModel.isStreaming {
                     // Stop button replaces send during streaming

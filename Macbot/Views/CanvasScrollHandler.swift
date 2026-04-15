@@ -15,6 +15,15 @@ struct CanvasScrollHandler: NSViewRepresentable {
     /// when no button is visibly focused; NSEvent monitoring inside this
     /// handler works regardless of the SwiftUI focus state.
     var onDeleteKey: () -> Void = {}
+    /// Fired on arrow keys. SwiftUI's .onKeyPress handlers only fire when
+    /// the canvas view has keyboard focus — which breaks every time the
+    /// user interacts with a non-focusable element (sidebar, overlay,
+    /// zoom animation). NSEvent monitoring is focus-independent.
+    /// dx/dy: -1/0/+1 per axis; (0,0) never fires.
+    var onArrowKey: (Int, Int) -> Void = { _, _ in }
+    /// Fired on Tab / Shift+Tab outside any text input.
+    /// `forward` is true for Tab, false for Shift+Tab.
+    var onTabKey: (Bool) -> Void = { _ in }
     var isSpacebarDown: Bool = false
     var isEdgeModeActive: Bool = false
 
@@ -25,6 +34,8 @@ struct CanvasScrollHandler: NSViewRepresentable {
         view.onSpacebarChanged = onSpacebarChanged
         view.onMouseMoved = onMouseMoved
         view.onDeleteKey = onDeleteKey
+        view.onArrowKey = onArrowKey
+        view.onTabKey = onTabKey
         return view
     }
 
@@ -34,6 +45,8 @@ struct CanvasScrollHandler: NSViewRepresentable {
         nsView.onSpacebarChanged = onSpacebarChanged
         nsView.onMouseMoved = onMouseMoved
         nsView.onDeleteKey = onDeleteKey
+        nsView.onArrowKey = onArrowKey
+        nsView.onTabKey = onTabKey
         nsView.updateCursor(spacebarDown: isSpacebarDown, edgeMode: isEdgeModeActive)
     }
 }
@@ -48,11 +61,15 @@ final class CanvasScrollNSView: NSView {
     var onSpacebarChanged: ((Bool) -> Void)?
     var onMouseMoved: ((CGPoint) -> Void)?
     var onDeleteKey: (() -> Void)?
+    var onArrowKey: ((Int, Int) -> Void)?
+    var onTabKey: ((Bool) -> Void)?
 
     private var flagsMonitor: Any?
     private var spaceDownMonitor: Any?
     private var spaceUpMonitor: Any?
     private var deleteKeyMonitor: Any?
+    private var arrowKeyMonitor: Any?
+    private var tabKeyMonitor: Any?
     private var scrollMonitor: Any?
 
     override var acceptsFirstResponder: Bool { true }
@@ -63,12 +80,73 @@ final class CanvasScrollNSView: NSView {
         if window != nil {
             installSpacebarMonitor()
             installDeleteKeyMonitor()
+            installArrowKeyMonitor()
+            installTabKeyMonitor()
             installScrollMonitor()
         } else {
             removeSpacebarMonitor()
             removeDeleteKeyMonitor()
+            removeArrowKeyMonitor()
+            removeTabKeyMonitor()
             removeScrollMonitor()
         }
+    }
+
+    /// Arrow-key monitor — mirrors deleteKeyMonitor. Fires only when no
+    /// text input has focus. Works regardless of which SwiftUI view
+    /// currently holds focus, so spatial nav is reliable after AI generate,
+    /// zoom animations, overlay dismissals, etc.
+    private func installArrowKeyMonitor() {
+        removeArrowKeyMonitor()
+        arrowKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return event }
+            // 123=left, 124=right, 125=down, 126=up
+            let code = event.keyCode
+            guard code == 123 || code == 124 || code == 125 || code == 126 else { return event }
+            guard !self.isFirstResponderTextField() else { return event }
+            let raw = event.modifierFlags.rawValue
+            let noModifiers = (raw & NSEvent.ModifierFlags.deviceIndependentFlagsMask.rawValue
+                & ~NSEvent.ModifierFlags.capsLock.rawValue
+                & ~NSEvent.ModifierFlags.numericPad.rawValue
+                & ~NSEvent.ModifierFlags.function.rawValue) == 0
+            guard noModifiers else { return event }
+            let dx: Int; let dy: Int
+            switch code {
+            case 123: (dx, dy) = (-1, 0)
+            case 124: (dx, dy) = (+1, 0)
+            case 125: (dx, dy) = (0, +1)
+            case 126: (dx, dy) = (0, -1)
+            default:  (dx, dy) = (0, 0)
+            }
+            self.onArrowKey?(dx, dy)
+            return nil
+        }
+    }
+
+    private func removeArrowKeyMonitor() {
+        if let m = arrowKeyMonitor { NSEvent.removeMonitor(m); arrowKeyMonitor = nil }
+    }
+
+    /// Tab / Shift+Tab monitor — same logic. Fires outside text input.
+    /// Canvas uses Tab = next-node, Shift+Tab = cycle-color of selection.
+    private func installTabKeyMonitor() {
+        removeTabKeyMonitor()
+        tabKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return event }
+            guard event.keyCode == 48 else { return event }   // 48 = Tab
+            guard !self.isFirstResponderTextField() else { return event }
+            // Allow only shift as a modifier; any other modifier bails.
+            let allowed: NSEvent.ModifierFlags = [.shift, .capsLock, .numericPad, .function]
+            let disallowed = event.modifierFlags.subtracting(allowed)
+            guard disallowed.isEmpty else { return event }
+            let shiftHeld = event.modifierFlags.contains(.shift)
+            self.onTabKey?(!shiftHeld)
+            return nil
+        }
+    }
+
+    private func removeTabKeyMonitor() {
+        if let m = tabKeyMonitor { NSEvent.removeMonitor(m); tabKeyMonitor = nil }
     }
 
     /// Intercept scroll events at the NSEvent level so they work regardless
@@ -181,10 +259,21 @@ final class CanvasScrollNSView: NSView {
         if let m = spaceUpMonitor { NSEvent.removeMonitor(m); spaceUpMonitor = nil }
     }
 
-    /// Returns true if the current first responder is a text input (NSTextView, NSTextField).
+    /// Returns true if the current first responder is an *editable* text input.
+    /// MarkdownUI renders card body text via a non-editable NSTextView; clicking
+    /// a card to select it makes that view the first responder, which previously
+    /// caused this guard to bail and pass scroll/delete events through to the
+    /// card. We only want to defer when a real editor (card TextEditor in edit
+    /// mode, search field, chat composer) is focused.
     private func isFirstResponderTextField() -> Bool {
         guard let responder = window?.firstResponder else { return false }
-        return responder is NSTextView || responder is NSTextField
+        if let textView = responder as? NSTextView {
+            return textView.isEditable
+        }
+        if let textField = responder as? NSTextField {
+            return textField.isEditable
+        }
+        return false
     }
 
     override func updateTrackingAreas() {
@@ -210,6 +299,8 @@ final class CanvasScrollNSView: NSView {
     deinit {
         removeSpacebarMonitor()
         removeDeleteKeyMonitor()
+        removeArrowKeyMonitor()
+        removeTabKeyMonitor()
         removeScrollMonitor()
     }
 

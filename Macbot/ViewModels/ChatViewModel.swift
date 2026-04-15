@@ -75,14 +75,24 @@ final class ChatViewModel {
     var chatListVisible = true
 
     /// Whether the canvas list panel is visible inside canvas mode.
+    /// Default collapsed — the canvas is the product; the sidebar is
+    /// opt-in via the rail icon click or ⌘\\.
     var canvasListVisible = false
+
+    /// Global cheat-sheet overlay (⌘/). Lives on the app VM rather than
+    /// per-mode so it's available everywhere.
+    var showCheatSheet = false
+
+    /// Persistent footer hint bar visibility. Default on; user can toggle
+    /// via the cheat sheet's "hide hints" affordance.
+    var showHintBar = true
 
     /// Toggle the secondary pane for the current mode.
     func toggleSecondaryPane() {
         switch contentMode {
         case .chat:     chatListVisible.toggle()
         case .canvas:   canvasListVisible.toggle()
-        case .notebook: break // Notebook's three-pane layout handles its own
+        case .notebook: notebookViewModel.notebooksPaneVisible.toggle()
         }
     }
 
