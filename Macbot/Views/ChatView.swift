@@ -882,7 +882,7 @@ struct ChatView: View {
                         .font(.caption)
                         .tint(MacbotDS.Colors.warning)
                         .foregroundStyle(MacbotDS.Colors.warning)
-                    Text("Editing message — press Enter to resend")
+                    Text("Editing message — press ⌘↩ to resend")
                         .font(.caption2)
                         .foregroundStyle(MacbotDS.Colors.textSec)
                     Spacer()
@@ -919,7 +919,6 @@ struct ChatView: View {
                 .foregroundStyle(MacbotDS.Colors.textPri)
                 .lineLimit(1...6)
                 .focused($inputFocused)
-                .onSubmit { sendMessage() }
                 // Esc cascade (chat): stop streaming → blur composer. After
                 // blur, the mode's list-nav keys (↑/↓/j/k/n) become available.
                 .onKeyPress(.escape) {
@@ -953,7 +952,7 @@ struct ChatView: View {
                     }
                     .disabled(!canSend)
                     .buttonStyle(.plain)
-                    .keyboardShortcut(.return, modifiers: [])
+                    .keyboardShortcut(.return, modifiers: .command)
                 }
             }
             .padding(.horizontal, MacbotDS.Space.md)
